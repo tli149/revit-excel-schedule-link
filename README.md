@@ -1,8 +1,10 @@
 # Excel Schedule Link for Revit 2024
 
-I kept retyping Excel tables into Revit, so I built this for the people I work
-with. You can show an Excel worksheet inside Revit as a schedule view and
-update it with one click when the workbook changes.
+When vendors and subcontractors sent product schedules in Excel, such as door
+hardware, fixtures, or equipment lists, I had to turn each file into a PDF and
+link it into Revit. That was a pain, so I built this to draw the Excel table
+directly in Revit. You can show an Excel worksheet inside Revit as a schedule
+view and update it with one click when the workbook changes.
 
 ![Link Manager](docs/images/link-manager.png)
 
