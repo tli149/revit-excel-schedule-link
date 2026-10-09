@@ -1,0 +1,61 @@
+# Build outputs and IDE state
+**/bin/
+**/obj/
+.vs/
+.vscode/
+.idea/
+TestResults/
+*.user
+*.suo
+*.dll
+*.pdb
+Thumbs.db
+.DS_Store
+
+# Reproducible release and documentation outputs
+/dist/
+/docs/pdf/
+/tools/UiHarness/out/
+/artifacts/
+coverage/
+**/coverage/
+*.coverage
+*.coveragexml
+*.opencover.xml
+SHA256SUMS.txt
+
+# Runtime / acceptance evidence
+/results/**
+!/results/
+!/results/**/
+!/results/**/ManualCheck*.txt
+
+# Local models, archives, and review scratch files
+*.zip
+*.rvt
+/scratchpad_*.png
+/LayoutOps_review_bundle.md
+
+# Local agent state
+/.git/
+/.codex/
+/.agents/
+/.claude/
+
+# Credentials and local configuration must never enter normal history
+.env
+.env.*
+**/.env
+**/.env.*
+**/secrets/
+**/.secrets/
+**/credentials/
+**/.credentials/
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519

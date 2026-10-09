@@ -1,0 +1,50 @@
+name: Bug report
+description: Report a reproducible problem with Excel Schedule Link.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not upload client or project files. This includes RVT/XLSX files, screenshots with project data, internal paths, and user names. Sanitize logs and examples before posting.
+  - type: input
+    id: version
+    attributes:
+      label: Add-in version
+      description: For example, 0.9.3.
+      placeholder: 0.9.3
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include Revit version, Windows version, and whether this was an installed package or a source build. Do not include user names or internal paths.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the smallest sanitized set of steps that shows the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs or messages
+      description: Remove client data, internal paths, user names, and secrets. Never attach RVT/XLSX files.
+      render: text

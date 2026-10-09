@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Excel Schedule Link - PRODUCTION add-in manifest template (English-only).
+
+  Registers the ribbon application (RibbonApplication) as the single entry. It
+  builds the "Excel Schedule Link" ribbon tab; the three commands (Link Excel /
+  Reload / Manage Links) are launched by its buttons, so they are NOT registered
+  as External Tools commands (no duplicate menu entries).
+
+  The diagnostic probe commands live in a separate debug manifest
+  (ExcelScheduleLink.Probe.addin.template) and are NOT part of production.
+
+  install-revit2024.ps1 replaces __ESL_DEPLOY_DIR__ with the absolute deploy
+  folder and writes the result to
+  %AppData%\Autodesk\Revit\Addins\2024\ExcelScheduleLink.addin.
+
+  ROLLBACK: if the ribbon fails to load, deploy the old External Tools menu
+  instead by generating the .addin from ExcelScheduleLink.addin.command-fallback.template.
+
+  To deploy manually, replace __ESL_DEPLOY_DIR__ with the absolute path of the
+  DLL folder.
+-->
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>Excel Schedule Link</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>5ca63925-61be-46a9-9a52-ed278d1dfab2</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.App.RibbonApplication</FullClassName>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>Excel Schedule Link</VendorDescription>
+  </AddIn>
+</RevitAddIns>

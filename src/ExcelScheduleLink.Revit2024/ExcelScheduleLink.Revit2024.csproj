@@ -1,0 +1,75 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>ExcelScheduleLink.Revit2024</RootNamespace>
+    <AssemblyName>ExcelScheduleLink.Revit2024</AssemblyName>
+    <!-- WinForms for the file/worksheet dialogs; WPF for ribbon ImageSource icons -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF>true</UseWPF>
+    <!--
+      Revit API reference resolution:
+        1) Use RevitAPI.dll and RevitAPIUI.dll from RevitApiDir (the default is
+           C:\Program Files\Autodesk\Revit 2024) when both files exist. These
+           local references are not copied to the output.
+        2) Otherwise use the pinned NuGet reference packages so a development
+           machine without Revit can build. ExcludeAssets=runtime keeps the
+           Revit API assemblies out of the output folder.
+      Override the directory with: dotnet build -p:RevitApiDir="D:\Autodesk\Revit 2024"
+    -->
+    <RevitApiDir Condition="'$(RevitApiDir)' == ''">C:\Program Files\Autodesk\Revit 2024</RevitApiDir>
+    <UseLocalRevitApi Condition="Exists('$(RevitApiDir)\RevitAPI.dll') And Exists('$(RevitApiDir)\RevitAPIUI.dll')">true</UseLocalRevitApi>
+    <UseLocalRevitApi Condition="'$(UseLocalRevitApi)' == ''">false</UseLocalRevitApi>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(UseLocalRevitApi)' == 'true'">
+    <Reference Include="RevitAPI">
+      <HintPath>$(RevitApiDir)\RevitAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="RevitAPIUI">
+      <HintPath>$(RevitApiDir)\RevitAPIUI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(UseLocalRevitApi)' != 'true'">
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="2024.3.40">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="2024.3.40">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The add-in references Contracts and the Excel.OpenXml implementation
+      assembly, but must NEVER reference DocumentFormat.OpenXml directly —
+      the Open XML dependency stays confined behind IExcelReadService so the
+      implementation can be swapped for the out-of-process ReaderHost if a
+      DLL conflict ever materializes. Verified after each build by dumping
+      the AssemblyRef table of the produced DLL.
+    -->
+    <ProjectReference Include="..\ExcelScheduleLink.Contracts\ExcelScheduleLink.Contracts.csproj" />
+    <ProjectReference Include="..\ExcelScheduleLink.Excel.OpenXml\ExcelScheduleLink.Excel.OpenXml.csproj" />
+    <!-- Pure layout math (no external deps, no OpenXml) — invariant preserved. -->
+    <ProjectReference Include="..\ExcelScheduleLink.Layout\ExcelScheduleLink.Layout.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="ExcelScheduleLink.addin.template" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="ExcelScheduleLink.addin.command-fallback.template" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="ExcelScheduleLink.Probe.addin.template" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Ribbon button icons (16/32 px), embedded so nothing extra is deployed. -->
+    <EmbeddedResource Include="Resources\*.png" />
+  </ItemGroup>
+
+</Project>

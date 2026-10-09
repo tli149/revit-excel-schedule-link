@@ -1,0 +1,248 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Excel Schedule Link - DEBUG / diagnostic probe manifest template.
+
+  These commands are diagnostic tools from the initial feasibility probe. They are
+  NOT part of the production deployment and are intentionally kept separate from
+  the production manifest. Install this manifest only for debugging/verification.
+
+  Replace __ESL_DEPLOY_DIR__ with the absolute DLL folder path (it points at the
+  same ExcelScheduleLink.Revit2024.dll as the production manifest) and save as
+  %AppData%\Autodesk\Revit\Addins\2024\ExcelScheduleLink.Probe.addin.
+
+  Historical probe labels may be Japanese; the current diagnostic probes below
+  use English labels and descriptions.
+-->
+<RevitAddIns>
+  <AddIn Type="Command">
+    <Name>ESL Probe 1 OpenXml</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>dc79e702-619d-468a-a799-bfdd9cf41fb9</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeOpenXmlCommand</FullClassName>
+    <Text>ESL Probe: 1. Open XML Assembly Probe</Text>
+    <Description>Records Open XML load state and reads a test XLSX through the payload. The model is not changed.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe 2 Schedule A</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>12c95929-8664-47b6-991e-4bf5e3743fdd</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeScheduleCommand</FullClassName>
+    <Text>ESL Probe: 2. Schedule Probe A (no fields)</Text>
+    <Description>Builds a 3x3 test table in the header of a multi-category schedule without fields (ESL_Step0_A_NoField).</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe 3 Schedule B</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>961e7772-edec-4f79-9e2b-efa47b1f936c</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeScheduleFallbackCommand</FullClassName>
+    <Text>ESL Probe: 3. Schedule Probe B (dummy field + contradictory filters)</Text>
+    <Description>Builds a 3x3 test table in the header of a schedule whose body is empty through a dummy field and contradictory filters (ESL_Step0_B_DummyFilter).</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe 4 Read Storage</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>551ba093-6bd1-4560-acb5-8a52bc45748a</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeReadStorageCommand</FullClassName>
+    <Text>ESL Probe: 4. Persistence Check (read-only)</Text>
+    <Description>Checks whether the header table and Extensible Storage entity remain after save and restart.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe N-Dummy Setup</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>82763852-0480-4e57-8098-c81d23a12f4d</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeNDummySetupCommand</FullClassName>
+    <Text>ESL Probe: N-Dummy Setup</Text>
+    <Description>Builds the N-dummy-body verification schedule (3 body fields + 3 header columns, distinct widths), runs API coupling tests + 50-field feasibility, and places it on a sheet. Report: %APPDATA%\ExcelScheduleLink\NDummyProbeReport.txt</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe N-Dummy Measure</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>bf5f045e-e2f3-4f96-87c8-18462281d3be</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeNDummyMeasureCommand</FullClassName>
+    <Text>ESL Probe: N-Dummy Measure</Text>
+    <Description>Records the current body/header column widths of the probe schedule. Run after dragging the middle sheet grip, and again after save/reopen (persistence).</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe Settings Save Failure</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>ff334f6f-2086-4a15-910e-acdfea820d58</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeSaveFailureCommand</FullClassName>
+    <Text>ESL Probe: Settings Save Failure</Text>
+    <Description>Opens the Link Manager with settings saving forced to fail (a transaction is held open), so the settings-save failure regression can be checked without a second worksharing user. Rolls back; changes nothing.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe Worksharing Status</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>d398d49d-c0a2-4e58-87f7-917cc1a30762</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeWorksharingStatusCommand</FullClassName>
+    <Text>ESL Probe: Worksharing Status</Text>
+    <Description>Writes a read-only evidence file for the worksharing checks: central/local paths, workset open state, and per-link checkout status, owner and resolved source path. Opens no transaction; changes nothing.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe Table State</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>04cd2ebb-2831-484b-a02a-a27e6fbf25af</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeTableStateCommand</FullClassName>
+    <Text>ESL Probe: Table State</Text>
+    <Description>Records persisted linked-schedule table definitions, sections, cell styles, merges, widths and heights without opening a schedule view or changing the model.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe Fail Next Style Validation</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>90a2ad2f-17e5-4e73-9b52-4b9b1d2f0e94</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeFailNextStyleValidationCommand</FullClassName>
+    <Text>ESL Probe: Break Next Reload Check</Text>
+    <Description>Arms the probe-manifest-only post-render validator failure. The next reload must roll back; this command is not in the production manifest.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe Text Size Calibration</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>7deb4663-b5a2-4fc1-92f3-094c3eeb1e67</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeTextSizeCalibrationCommand</FullClassName>
+    <Text>ESL Probe: Text Size Calibration</Text>
+    <Description>Measures Revit text-size quantization for six common sizes in one transaction that is never committed; the final rollback status is recorded.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe Fail Next Body Width Sync</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>7fbc0a28-7738-4666-974a-033b7171d730</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeFailNextBodyWidthSyncCommand</FullClassName>
+    <Text>ESL Probe: Break Next Column Width Apply</Text>
+    <Description>Arms the probe-manifest-only layout body-width failure. The next layout apply must roll back.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe Force Current-Table Capture Failure</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>d2bd1519-6d99-4d77-99f9-88f37a9f671b</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeForceCurrentTableCaptureFailureCommand</FullClassName>
+    <Text>ESL Probe: Break Next Table Rebuild Read</Text>
+    <Description>Arms a one-shot unreadable-cell result at the current-table snapshot capture seam; the next no-workbook rebuild must stop before its repair mutation transaction.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe Apply Explicit No-Border Style</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>7edb5e3d-377d-46f1-9bae-688197989f80</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeApplyExplicitNoBorderStyleCommand</FullClassName>
+    <Text>ESL Probe: Set No-Border Cell Style</Text>
+    <Description>On the active Excel-linked schedule, applies InvalidElementId to all four borders of header row 2 column 2 with explicit override flags in one committed transaction.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe Borrow Linked Schedule</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>524c4f94-ecd8-4add-b9a4-730a3d86cfeb</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeBorrowLinkedScheduleCommand</FullClassName>
+    <Text>ESL Probe: Borrow Selected Schedule</Text>
+    <Description>In a workshared document, checks out exactly one Excel-linked schedule selected in the Project Browser without opening a transaction, then reports checkout status and owner.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe Select Affected Schedule</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>90ebcf8f-88c2-4ae8-9095-e8c99de88f50</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeSelectAffectedScheduleCommand</FullClassName>
+    <Text>ESL Probe: Select Affected Schedule</Text>
+    <Description>Selects the first Excel-linked schedule with unsafe cell styles without opening it, so the layout dialog's Open Schedule View guard can be tested safely. Changes only the selection.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe Empty Top-Left Test</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>55378d23-6649-476b-87f8-0fdf58c3c6e9</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeEmptyTopLeftCommand</FullClassName>
+    <Text>ESL Probe: Empty Top-Left Test</Text>
+    <Description>On the active linked schedule, tries three ways of writing an empty top-left header cell inside one rolled-back transaction and records the cell type and style verdict after each.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe Dry-Run Render</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>b51d8368-e1e6-4508-af98-33465b900c79</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeDryRunRenderCommand</FullClassName>
+    <Text>ESL Probe: Dry-Run Render</Text>
+    <Description>Re-renders the active linked schedule from its workbook inside one rolled-back transaction and records the post-render style verdict with every header cell's facts. Nothing is committed.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe Render Variants</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>30357930-5e9f-491e-b588-c738cb95bd5b</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeRenderVariantsCommand</FullClassName>
+    <Text>ESL Probe: Render Variants</Text>
+    <Description>Replays the clear/insert/write part of a render on the active linked schedule in six variants, each in its own rolled-back transaction, and records the style verdict per variant. Nothing is committed.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe Style Materialize</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>42414c20-73ed-4a97-b294-1f652799ed73</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeStyleMaterializeCommand</FullClassName>
+    <Text>ESL Probe: Style Materialize</Text>
+    <Description>Repeats the bare clear/insert/write render steps on the active linked schedule with one candidate style materializer per variant (rolled back), then commits one bare variant and rescans. Close Revit without saving afterwards.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe Break Next Regeneration</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>ff180df7-4084-4e14-a487-88dc3161a3a6</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeFailNextRegenerationCommand</FullClassName>
+    <Text>ESL Probe: Break Next Regeneration</Text>
+    <Description>Arms a one-shot private marker treated identically to Revit's RegenerationFailedException at the next post-mutation style scan; the native exception cannot be constructed by the probe. Close the model without saving after the fatal message.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+</RevitAddIns>

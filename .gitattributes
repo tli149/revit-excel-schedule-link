@@ -1,0 +1,28 @@
+* text=auto
+.gitattributes text eol=lf
+.gitignore text eol=lf
+
+# Keep the Visual Studio solution in its conventional Windows form.
+*.sln text eol=crlf
+
+# Project text is normalized so different agents do not create EOL-only diffs.
+*.cs text eol=lf
+*.csproj text eol=lf
+*.props text eol=lf
+*.ps1 text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.template text eol=lf
+
+# Binary fixtures and artwork must not be line-ending converted.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.xlsx binary
+*.pdf binary
+*.zip binary
+*.rvt binary
+*.dll binary
+*.pdb binary

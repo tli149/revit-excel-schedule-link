@@ -1,0 +1,64 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{17CF7DDA-507E-4B10-ADB5-9AAFADE2F277}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ExcelScheduleLink.Contracts", "src\ExcelScheduleLink.Contracts\ExcelScheduleLink.Contracts.csproj", "{BD5D2D1D-AACE-450D-B7AF-9008904DE46B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ExcelScheduleLink.Excel.OpenXml", "src\ExcelScheduleLink.Excel.OpenXml\ExcelScheduleLink.Excel.OpenXml.csproj", "{6FD2DE59-643E-4B18-AB0A-0E685ED7FCE9}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ExcelScheduleLink.Probe.OpenXmlPayload", "src\ExcelScheduleLink.Probe.OpenXmlPayload\ExcelScheduleLink.Probe.OpenXmlPayload.csproj", "{A48D749E-0AF7-4D34-98C3-A468D56885FC}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ExcelScheduleLink.Revit2024", "src\ExcelScheduleLink.Revit2024\ExcelScheduleLink.Revit2024.csproj", "{CE8BD20A-E723-410E-960A-00F155D42A6B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ExcelScheduleLink.Layout", "src\ExcelScheduleLink.Layout\ExcelScheduleLink.Layout.csproj", "{00DE4115-2375-4C3B-A801-01A06F02BD80}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{00379A89-DBE8-4BF0-8C4E-5EB72401A5A9}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ExcelScheduleLink.Excel.OpenXml.Tests", "tests\ExcelScheduleLink.Excel.OpenXml.Tests\ExcelScheduleLink.Excel.OpenXml.Tests.csproj", "{20417449-47B8-4148-8770-34A431A93E6F}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{BD5D2D1D-AACE-450D-B7AF-9008904DE46B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BD5D2D1D-AACE-450D-B7AF-9008904DE46B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BD5D2D1D-AACE-450D-B7AF-9008904DE46B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BD5D2D1D-AACE-450D-B7AF-9008904DE46B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6FD2DE59-643E-4B18-AB0A-0E685ED7FCE9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6FD2DE59-643E-4B18-AB0A-0E685ED7FCE9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6FD2DE59-643E-4B18-AB0A-0E685ED7FCE9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6FD2DE59-643E-4B18-AB0A-0E685ED7FCE9}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A48D749E-0AF7-4D34-98C3-A468D56885FC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A48D749E-0AF7-4D34-98C3-A468D56885FC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A48D749E-0AF7-4D34-98C3-A468D56885FC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A48D749E-0AF7-4D34-98C3-A468D56885FC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{CE8BD20A-E723-410E-960A-00F155D42A6B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CE8BD20A-E723-410E-960A-00F155D42A6B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CE8BD20A-E723-410E-960A-00F155D42A6B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CE8BD20A-E723-410E-960A-00F155D42A6B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{00DE4115-2375-4C3B-A801-01A06F02BD80}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{00DE4115-2375-4C3B-A801-01A06F02BD80}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{00DE4115-2375-4C3B-A801-01A06F02BD80}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{00DE4115-2375-4C3B-A801-01A06F02BD80}.Release|Any CPU.Build.0 = Release|Any CPU
+		{20417449-47B8-4148-8770-34A431A93E6F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{20417449-47B8-4148-8770-34A431A93E6F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{20417449-47B8-4148-8770-34A431A93E6F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{20417449-47B8-4148-8770-34A431A93E6F}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{BD5D2D1D-AACE-450D-B7AF-9008904DE46B} = {17CF7DDA-507E-4B10-ADB5-9AAFADE2F277}
+		{6FD2DE59-643E-4B18-AB0A-0E685ED7FCE9} = {17CF7DDA-507E-4B10-ADB5-9AAFADE2F277}
+		{A48D749E-0AF7-4D34-98C3-A468D56885FC} = {17CF7DDA-507E-4B10-ADB5-9AAFADE2F277}
+		{CE8BD20A-E723-410E-960A-00F155D42A6B} = {17CF7DDA-507E-4B10-ADB5-9AAFADE2F277}
+		{00DE4115-2375-4C3B-A801-01A06F02BD80} = {17CF7DDA-507E-4B10-ADB5-9AAFADE2F277}
+		{20417449-47B8-4148-8770-34A431A93E6F} = {00379A89-DBE8-4BF0-8C4E-5EB72401A5A9}
+	EndGlobalSection
+EndGlobal

@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>ExcelScheduleLink.Contracts</RootNamespace>
+    <AssemblyName>ExcelScheduleLink.Contracts</AssemblyName>
+    <!-- Contracts holds only SheetModel / DTOs / IExcelReadService. It must stay free of external dependencies. -->
+  </PropertyGroup>
+
+</Project>

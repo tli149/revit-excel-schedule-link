@@ -1,0 +1,22 @@
+<Project>
+  <PropertyGroup>
+    <Product>ExcelScheduleLink</Product>
+    <Version>0.9.3</Version>
+    <Authors>tli149</Authors>
+    <Nullable>disable</Nullable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- Keep the default net48 C# 7.3-compatible language level so standalone
+         Build Tools builds use the same language version as the solution. -->
+  </PropertyGroup>
+
+  <!-- Release artifacts omit builder-specific paths. The ZIP is not claimed to
+       be reproducible unless two clean builds are compared explicitly. Debug
+       keeps the SDK defaults so local debugging remains fully available. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <PathMap>$(MSBuildThisFileDirectory)=/_/</PathMap>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Excel Schedule Link - PRODUCTION add-in manifest template (English-only).
+
+  Contains only the production "Link Excel Worksheet" command. The diagnostic
+  diagnostic probe commands live in a separate debug manifest
+  (ExcelScheduleLink.Probe.addin.template) and are NOT part of the production
+  deployment.
+
+  install-revit2024.ps1 replaces __ESL_DEPLOY_DIR__ with the absolute deploy
+  folder and writes the result to
+  %AppData%\Autodesk\Revit\Addins\2024\ExcelScheduleLink.addin.
+
+  To deploy manually, replace __ESL_DEPLOY_DIR__ with the absolute path of the
+  DLL folder.
+-->
+<RevitAddIns>
+  <AddIn Type="Command">
+    <Name>Excel Schedule Link - Link Excel Worksheet</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>4f777b50-8028-49b3-a619-76d196382450</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.LinkExcelCommand</FullClassName>
+    <Text>Excel Schedule Link: Link Excel Worksheet...</Text>
+    <Description>Links a worksheet from an .xlsx workbook into a new Revit schedule view. The worksheet content is rendered into the schedule header section and the link information is stored in the model.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>Excel Schedule Link</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>Excel Schedule Link - Reload Excel Worksheet</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>49211503-1d20-4eec-819a-82ef4a7bbfff</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ReloadExcelCommand</FullClassName>
+    <Text>Excel Schedule Link: Reload Excel Worksheet</Text>
+    <Description>Reloads the Excel content of the active (or selected) linked schedule, honoring the stored column-width / row-height modes and width scale. Nothing changes if the workbook cannot be read.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>Excel Schedule Link</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>Excel Schedule Link - Link Manager</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>004eba87-f971-41e4-b4b6-45fec3e1c533</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.LinkManagerCommand</FullClassName>
+    <Text>Excel Schedule Link: Link Manager...</Text>
+    <Description>Lists all Excel-linked schedules with their source path and status, lets you edit each link's column-width / row-height mode and width scale (applied on the next reload), and reload the selected link or all links.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>Excel Schedule Link</VendorDescription>
+  </AddIn>
+</RevitAddIns>

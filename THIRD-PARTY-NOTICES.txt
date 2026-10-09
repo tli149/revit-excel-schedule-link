@@ -1,0 +1,65 @@
+Excel Schedule Link v0.9.3 - Third-Party Notices
+================================================
+
+This file covers third-party assemblies that are copied into the current
+end-user package by scripts/build.ps1. Package versions and metadata below are
+from the restored NuGet package .nuspec files. The package output currently
+contains these third-party assemblies:
+
+1. Assembly: DocumentFormat.OpenXml.dll
+   NuGet package: DocumentFormat.OpenXml 3.5.1
+   License: MIT
+   Copyright: © Microsoft Corporation. All rights reserved.
+   Project URL: https://github.com/dotnet/Open-XML-SDK
+
+2. Assembly: DocumentFormat.OpenXml.Framework.dll
+   NuGet package: DocumentFormat.OpenXml.Framework 3.5.1
+   License: MIT
+   Copyright: © Microsoft Corporation. All rights reserved.
+   Project URL: https://github.com/dotnet/Open-XML-SDK
+
+The current net48 Revit add-in output was checked for transitive runtime DLLs.
+System.IO.Packaging, System.Memory, System.Buffers,
+System.Numerics.Vectors, and System.Runtime.CompilerServices.Unsafe are present
+in the restored dependency graph where applicable, but none of their DLLs is
+copied into the current Revit add-in output and therefore none is redistributed
+by this package. If a future target or package change causes another third-party
+assembly to land in the package, this notice must be updated with its restored
+NuGet metadata and license text.
+
+Autodesk Revit API assemblies (RevitAPI.dll and RevitAPIUI.dll) are referenced
+at build time only and are NOT redistributed. The package verification in
+scripts/build.ps1 fails if a RevitAPI*.dll is present under dist\ExcelScheduleLink.
+
+Build-only and test-only packages, including the Nice3point Revit API reference
+packages, Microsoft.NETFramework.ReferenceAssemblies, Microsoft.NET.Test.Sdk,
+xunit, and xunit.runner.visualstudio, do not land in the end-user package and
+are not listed as redistributed assemblies here.
+
+License text
+------------
+
+The two assemblies above use the same distinct license, MIT. The complete MIT
+license text is included once below.
+
+MIT License
+
+Copyright (c) <year> <copyright holders>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is furnished
+to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

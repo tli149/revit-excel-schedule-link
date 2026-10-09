@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>ExcelScheduleLink.Layout</RootNamespace>
+    <AssemblyName>ExcelScheduleLink.Layout</AssemblyName>
+    <!--
+      Pure paper-space layout math: column widths and row heights for the
+      rendered Excel table. No external dependencies, and no Revit / Excel
+      types, so it is unit-testable from the net8.0 test project (TFM-compatible
+      via netstandard2.0) and reusable by a future Layout ribbon panel
+      (Fit Content / Fit Sheet / Reset Widths). All tuning constants live in
+      LayoutMetrics.
+    -->
+  </PropertyGroup>
+
+</Project>

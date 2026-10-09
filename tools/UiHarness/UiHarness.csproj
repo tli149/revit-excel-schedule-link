@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    UI rendering harness (developer tool, NOT part of the add-in).
+
+    The Revit GUI is not practical for automated checks, so this tiny WinForms app opens the
+    add-in's dialogs OUTSIDE Revit, saves a PNG of each, and dumps every
+    control's bounds against its parent's client area to flag anything that is
+    cut off. It also renders at 1.5x / 2.0x font scale to stand in for a
+    high-DPI monitor.
+
+    It compiles the real dialog sources (Compile Include below) rather than
+    copying them, so what it renders is what ships. It is deliberately NOT in
+    ExcelScheduleLink.sln: `dotnet build ExcelScheduleLink.sln` never builds it.
+
+    Run:  dotnet build tools/UiHarness/UiHarness.csproj -c Release
+          tools/UiHarness/bin/Release/net48/UiHarness.exe <output-folder>
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>UiHarness</AssemblyName>
+    <RootNamespace>UiHarness</RootNamespace>
+    <LangVersion>7.3</LangVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <!-- Same Revit API resolution as the add-in project. -->
+    <RevitApiDir Condition="'$(RevitApiDir)' == ''">C:\Program Files\Autodesk\Revit 2024</RevitApiDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="RevitAPI">
+      <HintPath>$(RevitApiDir)\RevitAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ExcelScheduleLink.Contracts\ExcelScheduleLink.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\ExcelScheduleLink.Layout\ExcelScheduleLink.Layout.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="HarnessStubs.cs" />
+    <!-- The real dialog + the plain types it needs (no Revit API calls at render time). -->
+    <Compile Include="..\..\src\ExcelScheduleLink.Revit2024\UI\LayoutDialog.cs" Link="LayoutDialog.cs" />
+    <Compile Include="..\..\src\ExcelScheduleLink.Revit2024\UI\LinkExcelDialog.cs" Link="LinkExcelDialog.cs" />
+    <Compile Include="..\..\src\ExcelScheduleLink.Revit2024\UI\LengthUnitHelper.cs" Link="LengthUnitHelper.cs" />
+    <Compile Include="..\..\src\ExcelScheduleLink.Revit2024\Link\UserMessages.cs" Link="UserMessages.cs" />
+    <Compile Include="..\..\src\ExcelScheduleLink.Revit2024\Link\LayoutDtos.cs" Link="LayoutDtos.cs" />
+    <Compile Include="..\..\src\ExcelScheduleLink.Revit2024\Link\ExcelLinkInfo.cs" Link="ExcelLinkInfo.cs" />
+  </ItemGroup>
+
+</Project>

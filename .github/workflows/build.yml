@@ -1,0 +1,37 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build, test, and package
+        shell: pwsh
+        run: |
+          $missingRevitApiDir = Join-Path $env:RUNNER_TEMP 'RevitApiDirectoryNotInstalled'
+          & .\scripts\build.ps1 -Zip -RevitApiDir $missingRevitApiDir
+
+      - name: Upload package and checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExcelScheduleLink-package
+          if-no-files-found: error
+          path: |
+            ExcelScheduleLink_v*.zip
+            SHA256SUMS.txt

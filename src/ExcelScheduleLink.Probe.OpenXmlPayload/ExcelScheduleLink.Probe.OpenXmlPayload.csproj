@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>ExcelScheduleLink.Probe.OpenXmlPayload</RootNamespace>
+    <AssemblyName>ExcelScheduleLink.Probe.OpenXmlPayload</AssemblyName>
+    <!--
+      Diagnostic payload used only by developer and QA probes. The Revit
+      add-in does not statically reference Open XML; a probe loads this DLL
+      explicitly with Assembly.LoadFrom. Its public API uses strings only to
+      avoid shared-type identity issues. The payload project is not shipped to
+      end users.
+    -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="DocumentFormat.OpenXml" Version="3.5.1" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <ProjectReference Include="..\ExcelScheduleLink.Excel.OpenXml\ExcelScheduleLink.Excel.OpenXml.csproj" />
+  </ItemGroup>
+
+</Project>
