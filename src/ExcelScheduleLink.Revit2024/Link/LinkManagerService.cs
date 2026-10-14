@@ -28,6 +28,7 @@ namespace ExcelScheduleLink.Revit2024.Link
         public bool Success;
         public bool TransactionStarted;
         public bool RollbackVerified;
+        public bool FatalRegenerationFailure;
         public string Detail = string.Empty;
     }
 
@@ -146,77 +147,110 @@ namespace ExcelScheduleLink.Revit2024.Link
             ViewSchedule schedule = doc.GetElement(scheduleId) as ViewSchedule;
             if (schedule == null)
             {
-                return Failed("The linked schedule was not available.", false, false);
+                return Failed(UserMessages.ManagerLinkedScheduleUnavailable, false, false);
             }
             ExcelLinkStorage storage = ExcelLinkSchema.LoadAny(schedule);
             if (storage == null || storage.Info == null)
             {
-                return Failed("The link storage was not available.", false, false);
+                return Failed(UserMessages.LinkStorageNotAvailable, false, false);
             }
 
-            using (Transaction transaction = new Transaction(doc, "Edit Excel Link Settings"))
-            {
-                bool transactionStarted = false;
-                try
+            ModelMutationResult<bool> mutation = ModelMutation.Run<bool>(
+                doc,
+                "Edit Excel Link Settings",
+                delegate (ModelMutationContext context)
                 {
-                    if (transaction.Start() != TransactionStatus.Started)
+                    ModelMutationLinkLoadResult loaded =
+                        context.LoadV2Link(schedule, allowLegacyMigration);
+                    if (!loaded.IsLoaded)
                     {
-                        return Failed("The settings transaction did not start.", false, false);
-                    }
-                    transactionStarted = true;
-                    ExcelLinkInfo info = storage.Info;
-                    if (!storage.IsV2)
-                    {
-                        if (!allowLegacyMigration
-                            || !ExcelLinkMigration.MigrateInOpenTransaction(schedule))
+                        if (loaded.Status == ModelMutationLinkLoadStatus.LegacyMigrationRefused
+                            || loaded.Status == ModelMutationLinkLoadStatus.LegacyMigrationFailed)
                         {
-                            bool rollbackVerified = TransactionRollback.RollBackIfStarted(
-                                transaction) == TransactionStatus.RolledBack;
-                            return Failed("The legacy link could not be upgraded.",
-                                rollbackVerified, true);
+                            context.Abort(UserMessages.LegacyLinkUpgradeFailed);
+                            return false;
                         }
-                        info = ExcelLinkSchema.LoadV2(schedule);
-                        if (info == null)
+                        if (loaded.Status == ModelMutationLinkLoadStatus.StorageUnavailable)
                         {
-                            throw new InvalidOperationException(
-                                "Schema v2 was not available after legacy-link migration.");
+                            context.Abort(UserMessages.LinkStorageNotAvailable);
+                            return false;
                         }
+                        throw new InvalidOperationException(
+                            UserMessages.SchemaV2UnavailableAfterMigration);
                     }
+
+                    ExcelLinkInfo info = loaded.Info;
                     info.ColumnWidthMode = columnWidthMode;
                     info.RowHeightMode = rowHeightMode;
                     info.WidthScale = widthScale;
                     ExcelLinkSchema.SaveV2(schedule, info);
-                    TransactionStatus committed = transaction.Commit();
-                    if (committed != TransactionStatus.Committed)
-                    {
-                        bool rollbackVerified = TransactionRollback.RollBackIfStarted(
-                            transaction) == TransactionStatus.RolledBack;
-                        return Failed("The settings transaction returned status "
-                            + committed + ".", rollbackVerified, true);
-                    }
-                    return new SettingsSaveOutcome
-                    {
-                        Success = true,
-                        TransactionStarted = transactionStarted
-                    };
-                }
-                catch (System.Exception ex)
+                    return true;
+                });
+
+            if (mutation.Status == ModelMutationStatus.Committed)
+            {
+                return new SettingsSaveOutcome
                 {
-                    bool rollbackVerified = TransactionRollback.RollBackIfStarted(
-                        transaction) == TransactionStatus.RolledBack;
-                    return Failed(ex.ToString(), rollbackVerified, transactionStarted);
-                }
+                    Success = true,
+                    TransactionStarted = mutation.TransactionStarted
+                };
             }
+            if (mutation.Status == ModelMutationStatus.FatalRegeneration)
+            {
+                return Failed(
+                    UserMessages.RegenerationFailure,
+                    mutation.RollbackVerified,
+                    mutation.TransactionStarted,
+                    true);
+            }
+            if (mutation.Status == ModelMutationStatus.NotStarted)
+            {
+                return Failed(
+                    UserMessages.SettingsTransactionNotStarted,
+                    mutation.RollbackVerified,
+                    mutation.TransactionStarted);
+            }
+            if (mutation.Status == ModelMutationStatus.StartThrew)
+            {
+                Exception exception = mutation.Exception ?? new InvalidOperationException();
+                return Failed(
+                    exception.ToString(),
+                    mutation.RollbackVerified,
+                    mutation.TransactionStarted);
+            }
+            if (mutation.Status == ModelMutationStatus.Aborted)
+            {
+                return Failed(
+                    mutation.AbortReason,
+                    mutation.RollbackVerified,
+                    mutation.TransactionStarted);
+            }
+            if (mutation.Status == ModelMutationStatus.CommitNotCommitted)
+            {
+                return Failed(
+                    UserMessages.SettingsTransactionReturnedStatus(
+                        mutation.CommitStatus.Value.ToString()),
+                    mutation.RollbackVerified,
+                    mutation.TransactionStarted);
+            }
+
+            Exception failure = mutation.Exception ?? new InvalidOperationException();
+            return Failed(
+                failure.ToString(),
+                mutation.RollbackVerified,
+                mutation.TransactionStarted);
         }
 
         private static SettingsSaveOutcome Failed(
-            string detail, bool rollbackVerified, bool transactionStarted)
+            string detail, bool rollbackVerified, bool transactionStarted,
+            bool fatalRegenerationFailure = false)
         {
             return new SettingsSaveOutcome
             {
                 Success = false,
                 TransactionStarted = transactionStarted,
                 RollbackVerified = rollbackVerified,
+                FatalRegenerationFailure = fatalRegenerationFailure,
                 Detail = detail ?? string.Empty
             };
         }

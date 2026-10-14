@@ -1,3 +1,4 @@
+// Revit-free decision logic, kept in Contracts so the net8 tests can exercise it.
 using System;
 using System.Collections.Generic;
 

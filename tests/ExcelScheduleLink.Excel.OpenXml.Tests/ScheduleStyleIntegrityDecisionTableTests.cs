@@ -73,7 +73,7 @@ namespace ExcelScheduleLink.Excel.OpenXml.Tests
         [Fact]
         public void AT90_FullyBorderlessArial9AgainstArial12TextTypes_IsAffected()
         {
-            // Sol's adversarial case: 12 is in the verified 1/96-inch table
+            // Adversarial case: 12 is in the verified 1/96-inch table
             // units, while the all-invalid cells report a real 9-unit pair.
             ScheduleStyleFacts facts = MakeFacts(3);
             facts.TitleTextStyle = Text("Arial", 12.0);

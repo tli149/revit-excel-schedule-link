@@ -1,9 +1,7 @@
 ﻿using System;
-using System.IO;
 using Autodesk.Revit.DB;
 using ExcelScheduleLink.Contracts;
 using ExcelScheduleLink.Excel.OpenXml;
-using ExcelScheduleLink.Revit2024.Probing;
 
 namespace ExcelScheduleLink.Revit2024.Link
 {
@@ -61,6 +59,15 @@ namespace ExcelScheduleLink.Revit2024.Link
         public bool UnsafeStylesRepaired;
 
         public bool IsSuccess { get { return Kind == ReloadResultKind.Success; } }
+        public bool IsWorkbookUnavailable
+        {
+            get
+            {
+                return Kind == ReloadResultKind.SourceMissing
+                    || Kind == ReloadResultKind.ReadFailed
+                    || Kind == ReloadResultKind.NetworkAccessCancelled;
+            }
+        }
         public bool IsFatalRegenerationFailure
         {
             get { return Kind == ReloadResultKind.RegenerationFailed; }
@@ -68,7 +75,7 @@ namespace ExcelScheduleLink.Revit2024.Link
     }
 
     /// <summary>
-    /// Shared reload flow used by both the Reload command and the Link Manager.
+    /// Shared workbook reload operation used by the targeted and bulk flows.
     /// Reads the workbook OUTSIDE the transaction, delegates the decision dialog
     /// to ReloadDialogs, and only then starts a transaction to re-render and
     /// update the stored link info. Any render failure rolls the whole
@@ -187,137 +194,118 @@ namespace ExcelScheduleLink.Revit2024.Link
             outcome.UserConfirmed = decision.Kind != ReloadDecisionKind.Proceed;
 
             // ---- One transaction: re-render + update link info; rollback on failure ----
-            using (Transaction transaction = new Transaction(doc, "Reload Excel Worksheet"))
+            ModelMutationResult<HeaderTableRenderer.RenderResult> mutation =
+                ModelMutation.Run<HeaderTableRenderer.RenderResult>(
+                    doc,
+                    "Reload Excel Worksheet",
+                    delegate (ModelMutationContext context)
+                    {
+                        ModelMutationLinkLoadResult loaded =
+                            context.LoadV2Link(schedule, true);
+                        if (!loaded.IsLoaded)
+                        {
+                            throw new InvalidOperationException(
+                                loaded.Status == ModelMutationLinkLoadStatus.SchemaV2Unavailable
+                                    ? UserMessages.SchemaV2UnavailableAfterMigration
+                                    : UserMessages.LegacyLinkUpgradeFailedToSchemaV2);
+                        }
+
+                        ExcelLinkInfo transactionInfo = loaded.Info;
+                        if (pendingSettings != null)
+                        {
+                            transactionInfo.ColumnWidthMode = pendingSettings.ColumnWidthMode;
+                            transactionInfo.RowHeightMode = pendingSettings.RowHeightMode;
+                            transactionInfo.WidthScale = pendingSettings.WidthScale;
+                        }
+
+                        HeaderTableRenderer.RenderResult render = HeaderTableRenderer.Render(
+                            schedule, sheet, transactionInfo.WidthScale,
+                            transactionInfo.ColumnWidthMode, transactionInfo.RowHeightMode);
+
+                        // RendererVersion is a statement about this successful
+                        // render, not a health cache. It is saved only after the
+                        // in-transaction validation above has returned Healthy.
+                        transactionInfo.RendererVersion = ExcelLinkInfo.CurrentRendererVersion;
+
+                        // Stored paths are link configuration. Resolution through a
+                        // fallback candidate is not consent to relocate the link.
+                        transactionInfo.SourceLastWriteUtcTicks = fingerprint.LastWriteUtcTicks;
+                        transactionInfo.LastLoadedUtcTicks = DateTime.UtcNow.Ticks;
+                        transactionInfo.LastAcceptedSourceSha256 = fingerprint.Sha256;
+                        transactionInfo.LastAcceptedSourceSizeBytes = fingerprint.SizeBytes;
+                        ExcelLinkSchema.SaveV2(schedule, transactionInfo);
+                        return render;
+                    });
+
+            if (mutation.Status == ModelMutationStatus.FatalRegeneration)
             {
-                bool transactionStarted = false;
-                TransactionStatus? startStatus = null;
-                try
-                {
-                    startStatus = transaction.Start();
-                    if (startStatus != TransactionStatus.Started)
-                    {
-                        outcome.Kind = ReloadResultKind.RenderFailed;
-                        ScheduleIntegrityFlowDecisions.ReloadFailureTransactionObservation
-                            observation = ObserveReloadFailure(false, startStatus);
-                        outcome.Detail = ScheduleIntegrityFlowDecisions
-                            .MayQueryOwnershipAfterReloadFailure(observation)
-                            ? UserMessages.ReloadTransactionNotStarted
-                            : UserMessages.ReloadFailedRolledBack(
-                                UserMessages.ReloadTransactionNotStarted, false);
-                        ApplyOwnershipFailureDetail(doc, schedule, outcome, observation);
-                        return outcome;
-                    }
-                    transactionStarted = true;
-
-                    if (!storage.IsV2)
-                    {
-                        if (!ExcelLinkMigration.MigrateInOpenTransaction(schedule))
-                        {
-                            throw new InvalidOperationException(
-                                "The legacy link could not be upgraded to schema v2.");
-                        }
-                        info = ExcelLinkSchema.LoadV2(schedule);
-                        if (info == null)
-                        {
-                            throw new InvalidOperationException(
-                                "Schema v2 was not available after legacy-link migration.");
-                        }
-                    }
-
-                    if (pendingSettings != null)
-                    {
-                        info.ColumnWidthMode = pendingSettings.ColumnWidthMode;
-                        info.RowHeightMode = pendingSettings.RowHeightMode;
-                        info.WidthScale = pendingSettings.WidthScale;
-                    }
-
-                    HeaderTableRenderer.RenderResult render = HeaderTableRenderer.Render(
-                        schedule, sheet, info.WidthScale, info.ColumnWidthMode, info.RowHeightMode);
-
-                    // RendererVersion is a statement about this successful
-                    // render, not a health cache. It is saved only after the
-                    // in-transaction validation above has returned Healthy.
-                    info.RendererVersion = ExcelLinkInfo.CurrentRendererVersion;
-
-                    // Stored paths are link configuration. Resolution through a
-                    // fallback candidate is not consent to relocate the link.
-                    info.SourceLastWriteUtcTicks = fingerprint.LastWriteUtcTicks;
-                    info.LastLoadedUtcTicks = DateTime.UtcNow.Ticks;
-                    info.LastAcceptedSourceSha256 = fingerprint.Sha256;
-                    info.LastAcceptedSourceSizeBytes = fingerprint.SizeBytes;
-                    ExcelLinkSchema.SaveV2(schedule, info);
-
-                    TransactionStatus commitStatus = transaction.Commit();
-                    if (commitStatus != TransactionStatus.Committed)
-                    {
-                        TransactionStatus? rollbackStatus =
-                            TransactionRollback.RollBackIfStarted(transaction);
-                        outcome.RollbackVerified = rollbackStatus
-                            == TransactionStatus.RolledBack;
-                        outcome.Kind = ReloadResultKind.RenderFailed;
-                        outcome.Detail = UserMessages.ReloadFailedRolledBack(
-                            UserMessages.ReloadTransactionNotCommitted,
-                            outcome.RollbackVerified);
-                        ApplyOwnershipFailureDetail(
-                            doc, schedule, outcome,
-                            ObserveReloadFailure(transactionStarted, rollbackStatus));
-                        return outcome;
-                    }
-
-                    outcome.Kind = ReloadResultKind.Success;
-                    outcome.Rows = render.RowsRendered;
-                    outcome.Columns = render.ColumnsRendered;
-                    outcome.Truncated = render.Truncated;
-                    outcome.ViewWidthProblem = render.HasViewWidthProblem;
-                    outcome.ColumnWidthsRejected = render.ColumnWidthsRejected;
-                    outcome.UnsafeStylesRepaired = outcome.KnownAffectedBeforeReload;
-                    return outcome;
-                }
-                catch (Autodesk.Revit.Exceptions.RegenerationFailedException)
-                {
-                    outcome.RollbackVerified = TransactionRollback.RollBackIfStarted(transaction)
-                        == TransactionStatus.RolledBack;
-                    outcome.Kind = ReloadResultKind.RegenerationFailed;
-                    outcome.Detail = UserMessages.RegenerationFailure;
-                    return outcome;
-                }
-                catch (RegenerationFailureProbeException)
-                {
-                    outcome.RollbackVerified = TransactionRollback.RollBackIfStarted(transaction)
-                        == TransactionStatus.RolledBack;
-                    outcome.Kind = ReloadResultKind.RegenerationFailed;
-                    outcome.Detail = UserMessages.RegenerationFailure;
-                    return outcome;
-                }
-                catch (UnsafeScheduleStyleException)
-                {
-                    TransactionStatus? rollbackStatus =
-                        TransactionRollback.RollBackIfStarted(transaction);
-                    outcome.RollbackVerified = rollbackStatus
-                        == TransactionStatus.RolledBack;
-                    outcome.Kind = ReloadResultKind.RenderFailed;
-                    outcome.Detail = UserMessages.ReloadUnsafeStyleValidationFailed(
-                        outcome.ScheduleName, outcome.RollbackVerified);
-                    ApplyOwnershipFailureDetail(
-                        doc, schedule, outcome,
-                        ObserveReloadFailure(transactionStarted, rollbackStatus));
-                    return outcome;
-                }
-                catch (Exception ex)
-                {
-                    TransactionStatus? rollbackStatus =
-                        TransactionRollback.RollBackIfStarted(transaction);
-                    outcome.RollbackVerified = rollbackStatus
-                        == TransactionStatus.RolledBack;
-                    outcome.Kind = ReloadResultKind.RenderFailed;
-                    outcome.Detail = UserMessages.ReloadFailedRolledBack(
-                        ex.ToString(), outcome.RollbackVerified);
-                    ApplyOwnershipFailureDetail(
-                        doc, schedule, outcome,
-                        ObserveReloadFailure(transactionStarted, rollbackStatus));
-                    return outcome;
-                }
+                outcome.RollbackVerified = mutation.RollbackVerified;
+                outcome.Kind = ReloadResultKind.RegenerationFailed;
+                outcome.Detail = UserMessages.RegenerationFailure;
+                return outcome;
             }
+
+            if (mutation.Status == ModelMutationStatus.NotStarted)
+            {
+                outcome.Kind = ReloadResultKind.RenderFailed;
+                ScheduleIntegrityFlowDecisions.ReloadFailureTransactionObservation
+                    observation = ObserveReloadFailure(
+                        mutation.TransactionStarted, mutation.StartStatus);
+                outcome.Detail = ScheduleIntegrityFlowDecisions
+                    .MayQueryOwnershipAfterReloadFailure(observation)
+                    ? UserMessages.ReloadTransactionNotStarted
+                    : UserMessages.ReloadFailedRolledBack(
+                        UserMessages.ReloadTransactionNotStarted, false);
+                ApplyOwnershipFailureDetail(doc, schedule, outcome, observation);
+                return outcome;
+            }
+
+            if (mutation.Status == ModelMutationStatus.Committed)
+            {
+                HeaderTableRenderer.RenderResult render = mutation.Value;
+                outcome.Kind = ReloadResultKind.Success;
+                outcome.Rows = render.RowsRendered;
+                outcome.Columns = render.ColumnsRendered;
+                outcome.Truncated = render.Truncated;
+                outcome.ViewWidthProblem = render.HasViewWidthProblem;
+                outcome.ColumnWidthsRejected = render.ColumnWidthsRejected;
+                outcome.UnsafeStylesRepaired = outcome.KnownAffectedBeforeReload;
+                return outcome;
+            }
+
+            outcome.RollbackVerified = mutation.RollbackVerified;
+            outcome.Kind = ReloadResultKind.RenderFailed;
+            if (mutation.Status == ModelMutationStatus.StartThrew)
+            {
+                Exception exception = mutation.Exception ?? new InvalidOperationException();
+                outcome.Detail = UserMessages.ReloadFailedRolledBack(
+                    exception.ToString(), outcome.RollbackVerified);
+            }
+            else if (mutation.Status == ModelMutationStatus.CommitNotCommitted)
+            {
+                outcome.Detail = UserMessages.ReloadFailedRolledBack(
+                    UserMessages.ReloadTransactionNotCommitted,
+                    outcome.RollbackVerified);
+            }
+            else if (mutation.Exception is UnsafeScheduleStyleException)
+            {
+                outcome.Detail = UserMessages.ReloadUnsafeStyleValidationFailed(
+                    outcome.ScheduleName, outcome.RollbackVerified);
+            }
+            else
+            {
+                Exception exception = mutation.Exception;
+                string detail = mutation.Status == ModelMutationStatus.Aborted
+                    ? mutation.AbortReason
+                    : exception == null ? string.Empty : exception.ToString();
+                outcome.Detail = UserMessages.ReloadFailedRolledBack(
+                    detail, outcome.RollbackVerified);
+            }
+
+            ApplyOwnershipFailureDetail(
+                doc, schedule, outcome,
+                ObserveReloadFailure(mutation.TransactionStarted, mutation.RollbackStatus));
+            return outcome;
         }
 
         private static ScheduleIntegrityFlowDecisions.ReloadFailureTransactionObservation

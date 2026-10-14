@@ -16,7 +16,6 @@ namespace ExcelScheduleLink.Revit2024.App
     /// </summary>
     internal sealed class ScheduleIntegrityLifecycle
     {
-        private const string AutomaticNotificationKey = "automatic-style-integrity";
         private readonly UIControlledApplication _app;
 
         public ScheduleIntegrityLifecycle(UIControlledApplication app)
@@ -75,7 +74,7 @@ namespace ExcelScheduleLink.Revit2024.App
                     // without attempting a transaction; it is intentionally not
                     // a repair or a persistent write.
                     ScheduleIntegritySessionCache.ScanAutomatic(doc);
-                    state.ReadOnlyAtOpen = true;
+                    state.MarkReadOnlyAtOpen();
                     QueueNotification(state);
                     return;
                 }
@@ -83,7 +82,7 @@ namespace ExcelScheduleLink.Revit2024.App
                 if (doc.IsModifiable)
                 {
                     // An active transaction is not ours. Idling gets one retry.
-                    state.RetryPending = true;
+                    state.ScheduleRetry();
                     return;
                 }
 
@@ -95,13 +94,8 @@ namespace ExcelScheduleLink.Revit2024.App
                 // Opening a document must not be interrupted by an add-in scan.
                 // Preserve an honest not-checked state for the later Idling
                 // warning, without showing a dialog in DocumentOpened.
-                state.Results.Clear();
-                state.Results[-1L] = new StyleIntegrityResult
-                {
-                    State = StyleIntegrityState.Indeterminate,
-                    ReasonCode = StyleIntegrityReasonCode.TableReadFailed,
-                    FirstReadError = ex.GetType().Name + ": " + ex.Message
-                };
+                state.ClearResults();
+                state.RecordDocumentLevelFailure(ex);
                 QueueNotification(state);
             }
         }
@@ -169,19 +163,17 @@ namespace ExcelScheduleLink.Revit2024.App
 
             // Keep retry failures local to this document. A bad wrapper or a
             // transient Revit API failure must not abort Idling for other docs.
-            if (state.RetryPending && !state.RetryAttempted)
+            if (state.TryBeginRetry())
             {
                 try
                 {
-                    state.RetryAttempted = true;
                     ScheduleIntegritySessionCache.ScanAutomatic(state.Document);
-                    state.RetryPending = false;
+                    state.CompleteRetry();
                     QueueNotification(state);
                 }
                 catch (Exception ex)
                 {
-                    state.RetryAttempted = true;
-                    state.RetryPending = false;
+                    state.FailRetry();
                     RecordIdlingFailure(state, ex);
                 }
             }
@@ -189,43 +181,24 @@ namespace ExcelScheduleLink.Revit2024.App
             // Notification construction includes resolving schedule names from
             // the document and TaskDialog.Show itself, both of which may throw
             // during teardown. Contain the entire branch per state.
-            if (state.AutomaticNotificationPending)
+            if (state.NotificationPending)
             {
-                if (state.AutomaticNotificationInProgress)
+                if (state.NotificationInProgress)
                 {
                     return;
                 }
                 try
                 {
-                    if (!state.Notifications.HasBeenShown(AutomaticNotificationKey))
+                    TaskDialogResult notificationResult =
+                        ShowAutomaticNotification(state);
+                    if (notificationResult == TaskDialogResult.CommandLink1)
                     {
-                        if (!ScheduleIntegrityFlowDecisions.CanAttemptAutomaticNotification(
-                            true, false, state.AutomaticNotificationAttempts))
-                        {
-                            state.AutomaticNotificationPending = false;
-                            return;
-                        }
-                        state.AutomaticNotificationAttempts++;
-                        TaskDialogResult notificationResult =
-                            ShowAutomaticNotification(state);
-                        if (notificationResult == TaskDialogResult.CommandLink1)
-                        {
-                            RunAutomaticRepairs(state);
-                        }
-                    }
-                    else
-                    {
-                        state.AutomaticNotificationPending = false;
+                        RunAutomaticRepairs(state);
                     }
                 }
                 catch (Exception)
                 {
-                    if (!ScheduleIntegrityFlowDecisions.CanAttemptAutomaticNotification(
-                        state.AutomaticNotificationPending, false,
-                        state.AutomaticNotificationAttempts))
-                    {
-                        state.AutomaticNotificationPending = false;
-                    }
+                    state.NotificationAttemptFailed();
                 }
             }
         }
@@ -233,57 +206,53 @@ namespace ExcelScheduleLink.Revit2024.App
         private static void RecordIdlingFailure(
             ScheduleIntegrityDocumentState state, Exception exception)
         {
-            state.Results.Clear();
-            state.Results[-1L] = new StyleIntegrityResult
-            {
-                State = StyleIntegrityState.Indeterminate,
-                ReasonCode = StyleIntegrityReasonCode.TableReadFailed,
-                FirstReadError = exception.GetType().Name + ": " + exception.Message
-            };
+            state.ClearResults();
+            state.RecordDocumentLevelFailure(exception);
             try
             {
                 QueueNotification(state);
             }
             catch (Exception)
             {
-                state.AutomaticNotificationPending = false;
+                state.QueueNotification(false);
             }
         }
 
         private static void QueueNotification(ScheduleIntegrityDocumentState state)
         {
-            state.AutomaticNotificationPending =
+            IDictionary<long, StyleIntegrityResult> results =
+                state.GetResultsSnapshot();
+            state.QueueNotification(
                 ScheduleIntegrityFlowDecisions.NeedsAutomaticNotification(
-                    state.Results.Values);
+                    results.Values));
         }
 
         private static string BuildUnsafeStylesContent(
-            ScheduleIntegrityDocumentState state, bool offersReviewRepairs)
+            ScheduleIntegrityDocumentState state,
+            ScheduleIntegrityResultSummary summary,
+            bool offersReviewRepairs)
         {
-            List<string> affectedNames = new List<string>();
-            bool hasIndeterminate = false;
-            foreach (KeyValuePair<long, StyleIntegrityResult> pair in state.Results)
-            {
-                StyleIntegrityResult result = pair.Value;
-                if (result != null && result.State == StyleIntegrityState.Affected)
-                {
-                    ViewSchedule schedule = state.Document.GetElement(
-                        new ElementId(pair.Key)) as ViewSchedule;
-                    affectedNames.Add(schedule == null
-                        ? "(schedule unavailable)" : schedule.Name);
-                }
-                else if (result == null
-                    || result.State == StyleIntegrityState.Indeterminate)
-                {
-                    hasIndeterminate = true;
-                }
-            }
-
+            List<string> affectedNames = ResolveAffectedScheduleNames(
+                state.Document, summary);
             string content = UserMessages.AutomaticUnsafeStylesContent(
                 affectedNames, offersReviewRepairs);
-            return hasIndeterminate
+            return summary.HasIndeterminate
                 ? content + "\n\n" + UserMessages.AutomaticUnverifiedContent
                 : content;
+        }
+
+        private static List<string> ResolveAffectedScheduleNames(
+            Document document, ScheduleIntegrityResultSummary summary)
+        {
+            List<string> affectedNames = new List<string>();
+            foreach (long scheduleId in summary.AffectedScheduleIds)
+            {
+                ViewSchedule schedule = document.GetElement(
+                    new ElementId(scheduleId)) as ViewSchedule;
+                affectedNames.Add(schedule == null
+                    ? "(schedule unavailable)" : schedule.Name);
+            }
+            return affectedNames;
         }
 
         private static void RunAutomaticRepairs(
@@ -291,16 +260,13 @@ namespace ExcelScheduleLink.Revit2024.App
         {
             try
             {
+                ScheduleIntegrityResultSummary summary =
+                    state.GetResultSummary();
                 List<ViewSchedule> affected = new List<ViewSchedule>();
-                foreach (KeyValuePair<long, StyleIntegrityResult> pair in state.Results)
+                foreach (long scheduleId in summary.AffectedScheduleIds)
                 {
-                    if (pair.Value == null
-                        || pair.Value.State != StyleIntegrityState.Affected)
-                    {
-                        continue;
-                    }
                     ViewSchedule schedule = state.Document.GetElement(
-                        new ElementId(pair.Key)) as ViewSchedule;
+                        new ElementId(scheduleId)) as ViewSchedule;
                     if (schedule != null)
                     {
                         affected.Add(schedule);
@@ -311,7 +277,7 @@ namespace ExcelScheduleLink.Revit2024.App
                     ScheduleRepairCoordinator.ReviewAffectedSchedules(
                         state.Document,
                         affected,
-                        new Dictionary<long, StyleIntegrityResult>(state.Results));
+                        state.GetResultsSnapshot());
                 if (outcome != null && outcome.FatalRegenerationFailure)
                 {
                     // The coordinator already showed the one fatal message.
@@ -328,12 +294,7 @@ namespace ExcelScheduleLink.Revit2024.App
                 // A repair exception must not escape Idling. Do not convert a
                 // partially completed flow into success or silently discard
                 // the diagnostic; the next action remains an explicit check.
-                state.Results[-1L] = new StyleIntegrityResult
-                {
-                    State = StyleIntegrityState.Indeterminate,
-                    ReasonCode = StyleIntegrityReasonCode.TableReadFailed,
-                    FirstReadError = ex.GetType().Name + ": " + ex.Message
-                };
+                state.RecordDocumentLevelFailure(ex);
                 try
                 {
                     TaskDialog.Show(UserMessages.DialogTitle,
@@ -351,18 +312,14 @@ namespace ExcelScheduleLink.Revit2024.App
         private static TaskDialogResult ShowAutomaticNotification(
             ScheduleIntegrityDocumentState state)
         {
-            if (state.AutomaticNotificationInProgress)
+            if (!state.TryBeginNotification())
             {
                 return TaskDialogResult.Cancel;
             }
-            state.AutomaticNotificationInProgress = true;
             try
             {
-                if (state.Notifications.HasBeenShown(AutomaticNotificationKey))
-                {
-                    state.AutomaticNotificationPending = false;
-                    return TaskDialogResult.Cancel;
-                }
+                ScheduleIntegrityResultSummary summary =
+                    state.GetResultSummary();
 
                 // Build the complete dialog before consuming the once-per-
                 // document token. Both name resolution and TaskDialog.Show can
@@ -374,36 +331,19 @@ namespace ExcelScheduleLink.Revit2024.App
                 }
                 else
                 {
-                    List<string> affectedNames = new List<string>();
-                    bool hasIndeterminate = false;
-                    foreach (KeyValuePair<long, StyleIntegrityResult> pair in state.Results)
+                    if (summary.HasAffected)
                     {
-                        StyleIntegrityResult result = pair.Value;
-                        if (result != null && result.State == StyleIntegrityState.Affected)
-                        {
-                            ViewSchedule schedule = state.Document.GetElement(
-                                new ElementId(pair.Key)) as ViewSchedule;
-                            affectedNames.Add(schedule == null
-                                ? "(schedule unavailable)" : schedule.Name);
-                        }
-                        else if (result == null
-                            || result.State == StyleIntegrityState.Indeterminate)
-                        {
-                            hasIndeterminate = true;
-                        }
-                    }
-
-                    if (affectedNames.Count > 0)
-                    {
+                        List<string> affectedNames = ResolveAffectedScheduleNames(
+                            state.Document, summary);
                         string content = UserMessages.AutomaticUnsafeStylesContent(affectedNames);
-                        if (hasIndeterminate)
+                        if (summary.HasIndeterminate)
                         {
                             content += "\n\n" + UserMessages.AutomaticUnverifiedContent;
                         }
                         dialogContent = UserMessages.AutomaticUnsafeStylesInstruction
                             + "\n\n" + content;
                     }
-                    else if (hasIndeterminate)
+                    else if (summary.HasIndeterminate)
                     {
                         dialogContent = UserMessages.AutomaticUnverifiedInstruction
                             + "\n\n" + UserMessages.AutomaticUnverifiedContent;
@@ -416,24 +356,15 @@ namespace ExcelScheduleLink.Revit2024.App
                     }
                 }
 
-                bool hasAffected = false;
-                foreach (StyleIntegrityResult result in state.Results.Values)
-                {
-                    if (result != null && result.State == StyleIntegrityState.Affected)
-                    {
-                        hasAffected = true;
-                        break;
-                    }
-                }
-
                 TaskDialogResult dialogResult = TaskDialogResult.Cancel;
                 if (ScheduleIntegrityFlowDecisions.ShouldOfferReviewRepairsNow(
-                    hasAffected,
+                    summary.HasAffected,
                     state.Document.IsReadOnly))
                 {
                     TaskDialog dialog = new TaskDialog(UserMessages.DialogTitle);
                     dialog.MainInstruction = UserMessages.AutomaticUnsafeStylesInstruction;
-                    dialog.MainContent = BuildUnsafeStylesContent(state, true);
+                    dialog.MainContent = BuildUnsafeStylesContent(
+                        state, summary, true);
                     dialog.AllowCancellation = true;
                     dialog.CommonButtons = TaskDialogCommonButtons.Cancel;
                     dialog.AddCommandLink(
@@ -455,14 +386,12 @@ namespace ExcelScheduleLink.Revit2024.App
                 // Consume the once-per-document notification only after the
                 // dialog returned. Repair may now run, but it must not cause a
                 // second automatic warning for the same document.
-                state.Notifications.TryMarkShown(AutomaticNotificationKey);
-                state.AutomaticNotificationPending = false;
-                state.AutomaticNotificationAttempts = 0;
+                state.CompleteNotificationShown();
                 return dialogResult;
             }
             finally
             {
-                state.AutomaticNotificationInProgress = false;
+                state.EndNotificationAttempt();
             }
         }
     }

@@ -375,6 +375,10 @@ namespace ExcelScheduleLink.Revit2024.UI
 
         private void RefreshList(ElementId preferredId, bool rescanIntegrity = false)
         {
+            if (_fatalRegenerationFailure)
+            {
+                return;
+            }
             if (rescanIntegrity)
             {
                 ScheduleIntegritySessionCache.ScanManual(_doc);
@@ -441,6 +445,10 @@ namespace ExcelScheduleLink.Revit2024.UI
 
         private void OnSelectionChanged()
         {
+            if (_fatalRegenerationFailure)
+            {
+                return;
+            }
             if (_handlingSelection)
             {
                 return;
@@ -544,8 +552,13 @@ namespace ExcelScheduleLink.Revit2024.UI
                 : UserMessages.ManagerSettingsGroup;
         }
 
-        private bool SaveEditorSettings(bool forReloadAll = false)
+        private bool SaveEditorSettings(
+            bool forReloadAll = false, bool fromFormClosing = false)
         {
+            if (_fatalRegenerationFailure)
+            {
+                return false;
+            }
             if (_editorScheduleId == null)
             {
                 TaskDialog.Show(UserMessages.ManagerTitle, UserMessages.ManagerSelectFirst);
@@ -583,6 +596,12 @@ namespace ExcelScheduleLink.Revit2024.UI
                 _doc, _editorScheduleId, colMode, rowMode, (double)_widthScale.Value, true);
             if (saveOutcome == null || !saveOutcome.Success)
             {
+                if (saveOutcome != null && saveOutcome.FatalRegenerationFailure)
+                {
+                    StopAfterFatalRegenerationFailure(
+                        saveOutcome.Detail, !fromFormClosing);
+                    return false;
+                }
                 TaskDialog.Show(UserMessages.ManagerTitle, forReloadAll
                     ? UserMessages.ManagerReloadAllSettingsSaveFailed(
                         saveOutcome != null && saveOutcome.RollbackVerified,
@@ -616,6 +635,10 @@ namespace ExcelScheduleLink.Revit2024.UI
 
         private void OnApply()
         {
+            if (_fatalRegenerationFailure)
+            {
+                return;
+            }
             ElementId id = _editorScheduleId;
             if (!SaveEditorSettings())
             {
@@ -627,6 +650,10 @@ namespace ExcelScheduleLink.Revit2024.UI
 
         private void OnReloadSelected()
         {
+            if (_fatalRegenerationFailure)
+            {
+                return;
+            }
             ElementId id = _editorScheduleId;
             if (id == null)
             {
@@ -652,37 +679,19 @@ namespace ExcelScheduleLink.Revit2024.UI
                 }
                 : null;
             StyleIntegrityResult prior = LinkManagerService.GetIntegrity(_rows, id);
-            ReloadOutcome outcome = ReloadService.Reload(
+            TargetedReloadFlowResult flow = TargetedReloadFlow.Run(
                 _doc, schedule, ReloadScope.SingleLink, pending, prior);
-            if (outcome.IsFatalRegenerationFailure)
+            ReloadOutcome outcome = flow.Reload;
+            if (flow.FatalRegeneration)
             {
-                StopAfterFatalRegenerationFailure(outcome.Detail);
+                StopAfterFatalRegenerationFailure(
+                    outcome.IsFatalRegenerationFailure ? outcome.Detail : null);
                 return;
             }
-            bool fallbackSucceeded = false;
-            bool offersFallback =
-                    ScheduleIntegrityFlowDecisions.ShouldOfferCurrentTableFallback(
-                        prior == null ? (StyleIntegrityState?)null : prior.State,
-                        outcome.Kind != ReloadResultKind.SourceMissing
-                            && outcome.Kind != ReloadResultKind.NetworkAccessCancelled
-                            && outcome.Kind != ReloadResultKind.ReadFailed);
-            if (offersFallback)
-            {
-                RepairAttemptOutcome fallback =
-                    ScheduleRepairCoordinator.TryFallback(_doc, schedule);
-                if (fallback != null && fallback.FatalRegenerationFailure)
-                {
-                    StopAfterFatalRegenerationFailure(null);
-                    return;
-                }
-                fallbackSucceeded = fallback != null && fallback.Success;
-            }
-            StyleIntegrityResult after = RescanOne(id);
-            bool mutationSucceeded = outcome.IsSuccess || fallbackSucceeded;
-            bool finalRescanHealthy =
-                ScheduleIntegrityFlowDecisions.IsSuccessfulTargetedReload(
-                    outcome.IsSuccess, fallbackSucceeded, after);
-            bool postRepairFailed = mutationSucceeded && !finalRescanHealthy;
+            bool fallbackSucceeded = flow.Fallback != null
+                && flow.Fallback.Success;
+            StyleIntegrityResult after = flow.After;
+            bool postRepairFailed = flow.MutationSucceeded && !flow.FinalHealthy;
             if (postRepairFailed)
             {
                 TaskDialog.Show(UserMessages.DialogTitle,
@@ -714,6 +723,10 @@ namespace ExcelScheduleLink.Revit2024.UI
 
         private void OnCheckAndRepair()
         {
+            if (_fatalRegenerationFailure)
+            {
+                return;
+            }
             ElementId selected = _editorScheduleId;
             CheckAndRepairOutcome outcome =
                 ScheduleRepairCoordinator.CheckAndRepair(_doc);
@@ -730,6 +743,10 @@ namespace ExcelScheduleLink.Revit2024.UI
 
         private void OnReloadAll()
         {
+            if (_fatalRegenerationFailure)
+            {
+                return;
+            }
             ElementId selectedId = _editorScheduleId;
             if (_settingsDirty)
             {
@@ -754,86 +771,20 @@ namespace ExcelScheduleLink.Revit2024.UI
                 }
             }
 
-            int success = 0, unchanged = 0, missing = 0, failed = 0, repaired = 0,
-                confirmationRequired = 0;
-            List<string> truncatedSchedules = new List<string>();
-            List<string> confirmationDetails = new List<string>();
-            foreach (LinkRow row in new List<LinkRow>(_rows))
+            ReloadAllFlowResult reloadAll = ReloadAllFlow.Run(
+                _doc, new List<LinkRow>(_rows));
+            if (reloadAll.FatalRegenerationFailure)
             {
-                ViewSchedule schedule = _doc.GetElement(row.ScheduleId) as ViewSchedule;
-                if (schedule == null)
-                {
-                    failed++;
-                    confirmationDetails.Add(
-                        UserMessages.ManagerReloadAllUnavailable(row.ScheduleName));
-                    continue;
-                }
-                ReloadOutcome outcome = ReloadService.Reload(
-                    _doc, schedule, ReloadScope.AllLinks, null,
-                    row.IntegrityResult);
-                if (outcome.IsFatalRegenerationFailure)
-                {
-                    StopAfterFatalRegenerationFailure(outcome.Detail);
-                    return;
-                }
-                switch (outcome.Kind)
-                {
-                    case ReloadResultKind.Success:
-                        if (outcome.Truncated)
-                        {
-                            truncatedSchedules.Add(row.ScheduleName);
-                        }
-                        StyleIntegrityResult after = RescanOne(row.ScheduleId);
-                        if (ScheduleIntegrityFlowDecisions.CountsAsWorkbookRepair(
-                                row.IntegrityResult, true, after))
-                        {
-                            repaired++;
-                        }
-                        if (after == null || after.State != StyleIntegrityState.Healthy)
-                        {
-                            failed++;
-                            confirmationDetails.Add(
-                                UserMessages.ManagerReloadAllPostRepairNotHealthy(
-                                    row.ScheduleName));
-                            break;
-                        }
-                        success++;
-                        if (outcome.Identity == ExcelScheduleLink.Contracts.SourceIdentityState.Match)
-                        {
-                            unchanged++;
-                        }
-                        break;
-                    case ReloadResultKind.SourceMissing:
-                        missing++;
-                        RescanOne(row.ScheduleId);
-                        break;
-                    case ReloadResultKind.NetworkAccessCancelled:
-                        confirmationRequired++;
-                        confirmationDetails.Add(outcome.Detail);
-                        RescanOne(row.ScheduleId);
-                        break;
-                    case ReloadResultKind.ConfirmationRequired:
-                        confirmationRequired++;
-                        confirmationDetails.Add(outcome.Detail);
-                        RescanOne(row.ScheduleId);
-                        break;
-                    case ReloadResultKind.Cancelled:
-                        RescanOne(row.ScheduleId);
-                        break;
-                    default:
-                        RescanOne(row.ScheduleId);
-                        failed++;
-                        confirmationDetails.Add(
-                            UserMessages.ManagerReloadAllFailure(
-                                row.ScheduleName, outcome.Detail));
-                        break;
-                }
+                StopAfterFatalRegenerationFailure(reloadAll.FatalDetail);
+                return;
             }
             RefreshList(selectedId, false);
             TaskDialog.Show(UserMessages.ManagerTitle,
                 UserMessages.ManagerReloadSummary(
-                    success, unchanged, missing, failed, repaired,
-                    confirmationRequired, truncatedSchedules, confirmationDetails));
+                    reloadAll.Success, reloadAll.Unchanged, reloadAll.Missing,
+                    reloadAll.Failed, reloadAll.Repaired,
+                    reloadAll.ConfirmationRequired,
+                    reloadAll.TruncatedSchedules, reloadAll.Details));
         }
 
         private static void ShowReloadOutcome(ReloadOutcome outcome)
@@ -842,23 +793,10 @@ namespace ExcelScheduleLink.Revit2024.UI
             {
                 return;
             }
-            if (outcome.Kind == ReloadResultKind.Cancelled)
+            string message = UserMessages.ReloadOutcomeMessage(outcome);
+            if (!string.IsNullOrEmpty(message))
             {
-                return;
-            }
-            if (!outcome.IsSuccess && !string.IsNullOrEmpty(outcome.Detail))
-            {
-                TaskDialog.Show(UserMessages.ManagerTitle, outcome.Detail);
-                return;
-            }
-            if (outcome.IsSuccess)
-            {
-                string summary = UserMessages.ReloadSucceeded(outcome);
-                summary = UserMessages.AppendRenderNotes(
-                    summary, outcome.SourceRows, outcome.SourceColumns,
-                    outcome.Truncated, outcome.ViewWidthProblem,
-                    outcome.ColumnWidthsRejected);
-                TaskDialog.Show(UserMessages.ManagerTitle, summary);
+                TaskDialog.Show(UserMessages.ManagerTitle, message);
             }
         }
 
@@ -882,37 +820,37 @@ namespace ExcelScheduleLink.Revit2024.UI
                     e.Cancel = true;
                     return;
                 }
-                if (answer == DialogResult.Yes && !SaveEditorSettings())
+                if (answer == DialogResult.Yes)
                 {
-                    e.Cancel = true;
-                    return;
+                    bool saved = SaveEditorSettings(
+                        false, true);
+                    if (_fatalRegenerationFailure)
+                    {
+                        e.Cancel = false;
+                        return;
+                    }
+                    if (!saved)
+                    {
+                        e.Cancel = true;
+                        return;
+                    }
                 }
             }
             SaveUiSettings();
         }
 
-        private void StopAfterFatalRegenerationFailure(string detail)
+        private void StopAfterFatalRegenerationFailure(
+            string detail, bool close = true)
         {
             _fatalRegenerationFailure = true;
             if (!string.IsNullOrEmpty(detail))
             {
                 TaskDialog.Show(UserMessages.ManagerTitle, detail);
             }
-            Close();
-        }
-
-        private StyleIntegrityResult RescanOne(ElementId id)
-        {
-            ViewSchedule schedule = _doc.GetElement(id) as ViewSchedule;
-            if (schedule == null)
+            if (close)
             {
-                return null;
+                Close();
             }
-            StyleIntegrityResult result =
-                ScheduleStyleIntegrityScanner.ScanWithRolledBackTransaction(
-                    _doc, schedule);
-            ScheduleIntegritySessionCache.SetResult(_doc, id, result);
-            return result;
         }
 
         private void UpdateIntegrityRow(ElementId id, StyleIntegrityResult result)

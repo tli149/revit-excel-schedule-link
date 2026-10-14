@@ -7,7 +7,7 @@ profile.
 ## Requirements
 
 - Autodesk Revit **2024** on Windows
-- The release ZIP `ExcelScheduleLink_v0.9.3.zip` from the project's GitHub
+- The release ZIP `ExcelScheduleLink_v0.9.4.zip` from the project's GitHub
   **Releases** page
 - Nothing else — the runtime it needs comes with Revit 2024
 
@@ -17,14 +17,14 @@ profile.
 
 ## About the warnings Windows may show
 
-The 0.9.3 pilot DLLs and PowerShell scripts are **not digitally signed**. Your
+The 0.9.4 pilot DLLs and PowerShell scripts are **not digitally signed**. Your
 Windows settings may show an unknown publisher, SmartScreen may warn you, or
 PowerShell may refuse to run the scripts.
 
 - Use only the ZIP from this project's GitHub Releases page. You can compare its
   SHA-256 checksum with the `SHA256SUMS.txt` file published next to it:
   ```powershell
-  Get-FileHash .\ExcelScheduleLink_v0.9.3.zip -Algorithm SHA256
+  Get-FileHash .\ExcelScheduleLink_v0.9.4.zip -Algorithm SHA256
   ```
 - Do not turn off SmartScreen or your company's security policies to install
   it. On a managed office computer, ask your IT team to approve it.

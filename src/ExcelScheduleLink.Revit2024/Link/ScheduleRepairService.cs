@@ -154,22 +154,15 @@ namespace ExcelScheduleLink.Revit2024.Link
                     false, false);
             }
 
-            using (Transaction transaction = new Transaction(doc, RepairTransactionName))
-            {
-                bool started = false;
-                try
+            ModelMutationResult<bool> mutation = ModelMutation.Run<bool>(
+                doc,
+                RepairTransactionName,
+                delegate (ModelMutationContext context)
                 {
-                    TransactionStatus start = transaction.Start();
-                    if (start != TransactionStatus.Started)
-                    {
-                        return Failed("Revit did not allow starting the repair transaction.",
-                            false, false);
-                    }
-                    started = true;
                     if (!doc.IsModifiable)
                     {
-                        return Failed("The document was not modifiable after the repair transaction started.",
-                            false, true);
+                        context.Abort(UserMessages.RepairDocumentNotModifiableAfterStart);
+                        return false;
                     }
 
                     HeaderTableRenderer.ClearTo1x1(
@@ -196,72 +189,90 @@ namespace ExcelScheduleLink.Revit2024.Link
                         throw new UnsafeScheduleStyleException(validation);
                     }
 
-                    ExcelLinkStorage storage = ExcelLinkSchema.LoadAny(schedule);
-                    if (storage == null || storage.Info == null)
+                    ModelMutationLinkLoadResult loaded =
+                        context.LoadV2Link(schedule, true);
+                    if (!loaded.IsLoaded)
                     {
-                        throw new InvalidOperationException("The link storage was unavailable.");
-                    }
-                    ExcelLinkInfo info = storage.Info;
-                    if (!storage.IsV2)
-                    {
-                        if (!ExcelLinkMigration.MigrateInOpenTransaction(schedule))
+                        string detail;
+                        switch (loaded.Status)
                         {
-                            throw new InvalidOperationException(
-                                "The legacy link could not be upgraded.");
+                            case ModelMutationLinkLoadStatus.StorageUnavailable:
+                                detail = UserMessages.LinkStorageUnavailable;
+                                break;
+                            case ModelMutationLinkLoadStatus.SchemaV2Unavailable:
+                                detail = UserMessages.SchemaV2UnavailableAfterMigration;
+                                break;
+                            default:
+                                detail = UserMessages.LegacyLinkUpgradeFailed;
+                                break;
                         }
-                        info = ExcelLinkSchema.LoadV2(schedule);
-                        if (info == null)
-                        {
-                            throw new InvalidOperationException(
-                                "Schema v2 was not available after legacy-link migration.");
-                        }
+                        throw new InvalidOperationException(detail);
                     }
+
+                    ExcelLinkInfo info = loaded.Info;
                     info.RendererVersion = ExcelLinkInfo.CurrentRendererVersion;
                     ExcelLinkSchema.SaveV2(schedule, info);
+                    return true;
+                });
 
-                    TransactionStatus committed = transaction.Commit();
-                    if (committed != TransactionStatus.Committed)
-                    {
-                        bool rollback = TransactionRollback.RollBackIfStarted(transaction)
-                            == TransactionStatus.RolledBack;
-                        return Failed(
-                            UserMessages.FallbackRebuildFailed(
-                                UserMessages.ReloadTransactionNotCommitted, rollback),
-                            rollback, true);
-                    }
-                    return new RepairAttemptOutcome
-                    {
-                        Success = true,
-                        TransactionStarted = true,
-                        FromCurrentTable = true
-                    };
-                }
-                catch (Autodesk.Revit.Exceptions.RegenerationFailedException)
+            if (mutation.Status == ModelMutationStatus.Committed)
+            {
+                return new RepairAttemptOutcome
                 {
-                    bool rollback = started
-                        && TransactionRollback.RollBackIfStarted(transaction)
-                            == TransactionStatus.RolledBack;
-                    return Failed(
-                        UserMessages.RegenerationFailure, rollback, started, true);
-                }
-                catch (RegenerationFailureProbeException)
-                {
-                    bool rollback = started
-                        && TransactionRollback.RollBackIfStarted(transaction)
-                            == TransactionStatus.RolledBack;
-                    return Failed(
-                        UserMessages.RegenerationFailure, rollback, started, true);
-                }
-                catch (Exception ex)
-                {
-                    bool rollback = started
-                        && TransactionRollback.RollBackIfStarted(transaction)
-                            == TransactionStatus.RolledBack;
-                    return Failed(
-                        UserMessages.FallbackRebuildFailed(ex.Message, rollback),
-                        rollback, started);
-                }
+                    Success = true,
+                    TransactionStarted = mutation.TransactionStarted,
+                    FromCurrentTable = true
+                };
             }
+            bool rollbackVerified = mutation.TransactionStarted
+                && mutation.RollbackVerified;
+            if (mutation.Status == ModelMutationStatus.FatalRegeneration)
+            {
+                return Failed(
+                    UserMessages.RegenerationFailure,
+                    rollbackVerified,
+                    mutation.TransactionStarted,
+                    true);
+            }
+            if (mutation.Status == ModelMutationStatus.NotStarted)
+            {
+                return Failed(
+                    UserMessages.RepairTransactionNotStarted,
+                    rollbackVerified,
+                    mutation.TransactionStarted);
+            }
+            if (mutation.Status == ModelMutationStatus.StartThrew)
+            {
+                Exception exception = mutation.Exception ?? new InvalidOperationException();
+                return Failed(
+                    UserMessages.FallbackRebuildFailed(
+                        exception.Message, rollbackVerified),
+                    rollbackVerified,
+                    mutation.TransactionStarted);
+            }
+            if (mutation.Status == ModelMutationStatus.Aborted)
+            {
+                return Failed(
+                    mutation.AbortReason,
+                    rollbackVerified,
+                    mutation.TransactionStarted);
+            }
+            if (mutation.Status == ModelMutationStatus.CommitNotCommitted)
+            {
+                return Failed(
+                    UserMessages.FallbackRebuildFailed(
+                        UserMessages.ReloadTransactionNotCommitted,
+                        rollbackVerified),
+                    rollbackVerified,
+                    mutation.TransactionStarted);
+            }
+
+            Exception failure = mutation.Exception ?? new InvalidOperationException();
+            return Failed(
+                UserMessages.FallbackRebuildFailed(
+                    failure.Message, rollbackVerified),
+                rollbackVerified,
+                mutation.TransactionStarted);
         }
 
         private static HeaderTableSnapshot CaptureSnapshot(ViewSchedule schedule)

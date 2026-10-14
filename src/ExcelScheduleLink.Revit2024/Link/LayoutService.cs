@@ -263,6 +263,7 @@ namespace ExcelScheduleLink.Revit2024.Link
             // Layout is refused until a fresh read proves that the existing
             // header is safe. This is not a renderer-version cache or a reload
             // pre-scan; the read transaction is rolled back by the scanner.
+            // It is a pre-layout gate, so its result is intentionally not stored.
             StyleIntegrityResult beforeLayout =
                 ScheduleStyleIntegrityScanner.ScanWithRolledBackTransaction(doc, schedule);
             if (beforeLayout == null || beforeLayout.State != StyleIntegrityState.Healthy)
@@ -277,58 +278,29 @@ namespace ExcelScheduleLink.Revit2024.Link
                 return LayoutApplyResult.Failed(UserMessages.LayoutUnsafeStyles, null);
             }
 
-            using (Transaction t = new Transaction(doc, "Excel Schedule Link - Set Column Widths"))
-            {
-                TransactionStatus started;
-                try { started = t.Start(); }
-                catch (Exception ex)
+            int at = 0;
+            ModelMutationResult<bool> mutation = ModelMutation.Run<bool>(
+                doc,
+                "Excel Schedule Link - Set Column Widths",
+                delegate (ModelMutationContext context)
                 {
-                    return LayoutApplyResult.Failed(
-                        UserMessages.LayoutTransactionNotStarted(ex.Message), null);
-                }
-                if (started != TransactionStatus.Started)
-                {
-                    // Nothing was opened, so nothing to roll back.
-                    return LayoutApplyResult.Failed(
-                        UserMessages.LayoutTransactionNotStarted(started.ToString()), null);
-                }
-
-                // Scoped to THIS transaction only: unresolved errors roll back
-                // instead of leaving the commit Pending on a user prompt.
-                try
-                {
-                    FailureHandlingOptions options = t.GetFailureHandlingOptions();
-                    options.SetFailuresPreprocessor(new LayoutFailurePreprocessor());
-                    options.SetClearAfterRollback(true);
-                    t.SetFailureHandlingOptions(options);
-                }
-                catch (Exception)
-                {
-                    // Failure-handling setup is best effort; the status checks below
-                    // still prevent reporting a non-committed transaction as success.
-                }
-
-                int at = 0;
-                try
-                {
-                    ExcelLinkInfo info = storage.Info;
-                    if (!storage.IsV2)
+                    ModelMutationLinkLoadResult loaded =
+                        context.LoadV2Link(schedule, allowLegacyMigration);
+                    if (!loaded.IsLoaded)
                     {
-                        if (!ExcelLinkMigration.MigrateInOpenTransaction(schedule))
+                        if (loaded.Status == ModelMutationLinkLoadStatus.LegacyMigrationRefused
+                            || loaded.Status == ModelMutationLinkLoadStatus.LegacyMigrationFailed)
                         {
-                            bool rollbackVerified = TransactionRollback.RollBackIfStarted(t)
-                                == TransactionStatus.RolledBack;
-                            return LayoutApplyResult.Failed(
-                                UserMessages.LayoutLegacyMigrationFailed(rollbackVerified), null);
+                            context.Abort(UserMessages.LayoutLegacyMigrationRequired);
+                            return false;
                         }
-                        info = ExcelLinkSchema.LoadV2(schedule);
-                        if (info == null)
-                        {
-                            throw new InvalidOperationException(
-                                "Schema v2 was not available after legacy-link migration.");
-                        }
+                        throw new InvalidOperationException(
+                            loaded.Status == ModelMutationLinkLoadStatus.SchemaV2Unavailable
+                                ? UserMessages.SchemaV2UnavailableAfterMigration
+                                : UserMessages.LinkStorageUnavailable);
                     }
 
+                    ExcelLinkInfo info = loaded.Info;
                     // (3)(4) All widths in one transaction; no per-column catch.
                     for (at = 0; at < headerColumns; at++)
                     {
@@ -360,61 +332,71 @@ namespace ExcelScheduleLink.Revit2024.Link
                         info.ColumnWidthMode = modeToSave.Value;
                     }
                     ExcelLinkSchema.SaveV2(schedule, info);
+                    return true;
+                },
+                new ModelMutationOptions
+                {
+                    FailuresPreprocessor = new LayoutFailurePreprocessor(),
+                    ClearAfterRollback = true
+                });
 
-                    TransactionStatus committed = t.Commit();
-                    if (committed != TransactionStatus.Committed)
-                    {
-                        bool rollbackVerified = TransactionRollback.RollBackIfStarted(t)
-                            == TransactionStatus.RolledBack;
-                        return LayoutApplyResult.Failed(
-                            UserMessages.LayoutCommitNotCompleted(
-                                committed.ToString(), rollbackVerified), null);
-                    }
-
-                    return new LayoutApplyResult
-                    {
-                        Success = true,
-                        UserMessage = UserMessages.LayoutApplied(schedule.Name, headerColumns)
-                    };
-                }
-                catch (Autodesk.Revit.Exceptions.RegenerationFailedException)
+            if (mutation.Status == ModelMutationStatus.Committed)
+            {
+                return new LayoutApplyResult
                 {
-                    TransactionRollback.RollBackIfStarted(t);
-                    return LayoutApplyResult.RegenerationFailed();
-                }
-                catch (RegenerationFailureProbeException)
-                {
-                    TransactionRollback.RollBackIfStarted(t);
-                    return LayoutApplyResult.RegenerationFailed();
-                }
-                catch (BodyColumnWidthSyncException)
-                {
-                    bool rollbackVerified = TransactionRollback.RollBackIfStarted(t)
-                        == TransactionStatus.RolledBack;
-                    return LayoutApplyResult.Failed(
-                        UserMessages.LayoutBodyWidthSyncFailed(rollbackVerified), null);
-                }
-                catch (UnsafeScheduleStyleException)
-                {
-                    bool rollbackVerified = TransactionRollback.RollBackIfStarted(t)
-                        == TransactionStatus.RolledBack;
-                    return LayoutApplyResult.Failed(
-                        UserMessages.LayoutUnsafeStylesAfterRollback(rollbackVerified), null);
-                }
-                catch (Exception ex)
-                {
-                    // (4)(5) Whole transaction reverts: column widths AND the mode change.
-                    // A rollback failure must not mask the original error.
-                    bool rollbackVerified = TransactionRollback.RollBackIfStarted(t)
-                        == TransactionStatus.RolledBack;
-                    string where = at < headerColumns
-                        ? UserMessages.LayoutColumnLabel(at + 1)
-                        : UserMessages.LayoutSettingsLabel;
-                    return LayoutApplyResult.Failed(
-                        UserMessages.LayoutApplyFailed(
-                            where, ex.Message, rollbackVerified), null);
-                }
+                    Success = true,
+                    UserMessage = UserMessages.LayoutApplied(schedule.Name, headerColumns)
+                };
             }
+            if (mutation.Status == ModelMutationStatus.FatalRegeneration)
+            {
+                return LayoutApplyResult.RegenerationFailed();
+            }
+            if (mutation.Status == ModelMutationStatus.NotStarted)
+            {
+                string status = mutation.StartStatus.HasValue
+                    ? mutation.StartStatus.Value.ToString() : string.Empty;
+                return LayoutApplyResult.Failed(
+                    UserMessages.LayoutTransactionNotStarted(status), null);
+            }
+            if (mutation.Status == ModelMutationStatus.StartThrew)
+            {
+                string detail = mutation.Exception == null
+                    ? string.Empty : mutation.Exception.Message;
+                return LayoutApplyResult.Failed(
+                    UserMessages.LayoutTransactionNotStarted(detail), null);
+            }
+            if (mutation.Status == ModelMutationStatus.Aborted)
+            {
+                return LayoutApplyResult.Failed(
+                    UserMessages.LayoutLegacyMigrationFailed(mutation.RollbackVerified), null);
+            }
+            if (mutation.Status == ModelMutationStatus.CommitNotCommitted)
+            {
+                return LayoutApplyResult.Failed(
+                    UserMessages.LayoutCommitNotCompleted(
+                        mutation.CommitStatus.Value.ToString(), mutation.RollbackVerified), null);
+            }
+            if (mutation.Exception is BodyColumnWidthSyncException)
+            {
+                return LayoutApplyResult.Failed(
+                    UserMessages.LayoutBodyWidthSyncFailed(mutation.RollbackVerified), null);
+            }
+            if (mutation.Exception is UnsafeScheduleStyleException)
+            {
+                return LayoutApplyResult.Failed(
+                    UserMessages.LayoutUnsafeStylesAfterRollback(mutation.RollbackVerified), null);
+            }
+
+            Exception exception = mutation.Exception ?? new InvalidOperationException();
+            // (4)(5) Whole transaction reverts: column widths AND the mode change.
+            // A rollback failure must not mask the original error.
+            string where = at < headerColumns
+                ? UserMessages.LayoutColumnLabel(at + 1)
+                : UserMessages.LayoutSettingsLabel;
+            return LayoutApplyResult.Failed(
+                UserMessages.LayoutApplyFailed(
+                    where, exception.Message, mutation.RollbackVerified), null);
         }
     }
 }

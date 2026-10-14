@@ -9,8 +9,8 @@ namespace ExcelScheduleLink.Revit2024.Commands
     /// <summary>
     /// Step 3 production command: reloads the Excel content of a linked
     /// schedule (the active view, or a single selected linked schedule).
-    /// The actual reload flow lives in <see cref="ReloadService"/> so it is
-    /// shared with the Link Manager.
+    /// The targeted reload flow lives in <see cref="TargetedReloadFlow"/> so
+    /// it is shared with the Link Manager and repair coordinator.
     /// </summary>
     [Transaction(TransactionMode.Manual)]
     public class ReloadExcelCommand : IExternalCommand
@@ -34,45 +34,26 @@ namespace ExcelScheduleLink.Revit2024.Commands
 
             StyleIntegrityResult preReloadIntegrityHint =
                 ScheduleIntegritySessionCache.GetResult(uidoc.Document, schedule.Id);
-            ReloadOutcome outcome = ReloadService.Reload(
+            TargetedReloadFlowResult flow = TargetedReloadFlow.Run(
                 uidoc.Document, schedule, ReloadScope.SingleLink, null,
                 preReloadIntegrityHint);
-            if (outcome.IsFatalRegenerationFailure)
+            if (flow.FatalRegeneration)
             {
-                TaskDialog.Show(UserMessages.DialogTitle, outcome.Detail);
-                message = outcome.Detail;
+                if (flow.Reload.IsFatalRegenerationFailure)
+                {
+                    TaskDialog.Show(UserMessages.DialogTitle, flow.Reload.Detail);
+                    message = flow.Reload.Detail;
+                }
+                else if (flow.Fallback != null)
+                {
+                    message = flow.Fallback.Detail;
+                }
                 return Result.Failed;
             }
-            bool fallbackSucceeded = false;
-            bool offersFallback =
-                ScheduleIntegrityFlowDecisions.ShouldOfferCurrentTableFallback(
-                    preReloadIntegrityHint == null
-                        ? (StyleIntegrityState?)null : preReloadIntegrityHint.State,
-                    outcome.Kind != ReloadResultKind.SourceMissing
-                        && outcome.Kind != ReloadResultKind.NetworkAccessCancelled
-                        && outcome.Kind != ReloadResultKind.ReadFailed);
-            if (offersFallback)
-            {
-                RepairAttemptOutcome fallback =
-                    ScheduleRepairCoordinator.TryFallback(uidoc.Document, schedule);
-                if (fallback != null && fallback.FatalRegenerationFailure)
-                {
-                    message = fallback.Detail;
-                    return Result.Failed;
-                }
-                fallbackSucceeded = fallback != null && fallback.Success;
-            }
-
-            StyleIntegrityResult after =
-                ScheduleStyleIntegrityScanner.ScanWithRolledBackTransaction(
-                    uidoc.Document, schedule);
-            ScheduleIntegritySessionCache.SetResult(uidoc.Document, schedule.Id, after);
-
-            bool mutationSucceeded = outcome.IsSuccess || fallbackSucceeded;
-            bool finalRescanHealthy =
-                ScheduleIntegrityFlowDecisions.IsSuccessfulTargetedReload(
-                    outcome.IsSuccess, fallbackSucceeded, after);
-            if (mutationSucceeded && !finalRescanHealthy)
+            ReloadOutcome outcome = flow.Reload;
+            bool fallbackSucceeded = flow.Fallback != null
+                && flow.Fallback.Success;
+            if (flow.MutationSucceeded && !flow.FinalHealthy)
             {
                 TaskDialog.Show(UserMessages.DialogTitle,
                     UserMessages.FallbackPostRepairFailed);
@@ -88,30 +69,29 @@ namespace ExcelScheduleLink.Revit2024.Commands
             switch (outcome.Kind)
             {
                 case ReloadResultKind.Success:
-                    string summary = UserMessages.ReloadSucceeded(outcome);
-                    summary = UserMessages.AppendRenderNotes(
-                        summary, outcome.SourceRows, outcome.SourceColumns,
-                        outcome.Truncated, outcome.ViewWidthProblem,
-                        outcome.ColumnWidthsRejected);
-                    TaskDialog.Show(UserMessages.DialogTitle, summary);
+                    TaskDialog.Show(UserMessages.DialogTitle,
+                        UserMessages.ReloadOutcomeMessage(outcome));
                     return Result.Succeeded;
 
                 case ReloadResultKind.SourceMissing:
                 case ReloadResultKind.NetworkAccessCancelled:
                 case ReloadResultKind.ReadFailed:
-                    TaskDialog.Show(UserMessages.DialogTitle, outcome.Detail);
+                    TaskDialog.Show(UserMessages.DialogTitle,
+                        UserMessages.ReloadOutcomeMessage(outcome));
                     return Result.Cancelled; // nothing changed
 
                 case ReloadResultKind.ConfirmationRequired:
                 case ReloadResultKind.Cancelled:
                     if (outcome.Kind == ReloadResultKind.ConfirmationRequired)
                     {
-                        TaskDialog.Show(UserMessages.DialogTitle, outcome.Detail);
+                        TaskDialog.Show(UserMessages.DialogTitle,
+                            UserMessages.ReloadOutcomeMessage(outcome));
                     }
                     return Result.Cancelled; // no bulk or canceled mutation
 
                 case ReloadResultKind.RenderFailed:
-                    TaskDialog.Show(UserMessages.DialogTitle, outcome.Detail);
+                    TaskDialog.Show(UserMessages.DialogTitle,
+                        UserMessages.ReloadOutcomeMessage(outcome));
                     message = outcome.Detail;
                     return Result.Failed;
 

@@ -41,7 +41,7 @@ you extract it.
 **Symptom:** the script window closes right away, PowerShell says running
 scripts is disabled, or SmartScreen warns about an unknown publisher.
 
-**Cause:** the 0.9.3 pilot files are not digitally signed, and your computer's
+**Cause:** the 0.9.4 pilot files are not digitally signed, and your computer's
 policy does not allow unsigned scripts from the internet.
 
 **Fix:** unblock the ZIP before extracting (see INSTALL.md, Step 1), then use
@@ -163,7 +163,7 @@ Open an issue on the project's GitHub page. Include:
 
 1. What you clicked and what you expected.
 2. The exact message text (a screenshot is fine).
-3. Your Revit 2024 build (Help → About) and the add-in version (0.9.3).
+3. Your Revit 2024 build (Help → About) and the add-in version (0.9.4).
 4. For "nothing happens" problems: the relevant lines of the newest journal
    file from `%LOCALAPPDATA%\Autodesk\Revit\Autodesk Revit 2024\Journals\`.
 

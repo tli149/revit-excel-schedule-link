@@ -322,6 +322,23 @@
             return text;
         }
 
+        public static string ReloadOutcomeMessage(ReloadOutcome outcome)
+        {
+            if (outcome == null || outcome.Kind == ReloadResultKind.Cancelled)
+            {
+                return string.Empty;
+            }
+            if (outcome.IsSuccess)
+            {
+                return AppendRenderNotes(
+                    ReloadSucceeded(outcome),
+                    outcome.SourceRows, outcome.SourceColumns,
+                    outcome.Truncated, outcome.ViewWidthProblem,
+                    outcome.ColumnWidthsRejected);
+            }
+            return outcome.Detail ?? string.Empty;
+        }
+
         public const string UnsafeCellStylesRepaired = "Unsafe cell styles were repaired.";
 
         // ---- Schedule style integrity lifecycle / activation ----
@@ -446,6 +463,32 @@
                 + (string.IsNullOrEmpty(detail) ? string.Empty : "\n\n" + detail);
         }
 
+        public static string RepairDeclined(string scheduleName)
+        {
+            return "Repair declined: " + (scheduleName ?? string.Empty);
+        }
+
+        public static string RepairFailed(string scheduleName)
+        {
+            return "Repair failed: " + (scheduleName ?? string.Empty);
+        }
+
+        public static string RepairFailedPostRepairScan(string scheduleName)
+        {
+            return RepairFailed(scheduleName)
+                + " (post-repair scan was not Healthy)";
+        }
+
+        public static string RepairNotChecked(string scheduleName)
+        {
+            return "Not checked: " + (scheduleName ?? string.Empty);
+        }
+
+        public static string RepairUnsafe(string scheduleName)
+        {
+            return "Unsafe: " + (scheduleName ?? string.Empty);
+        }
+
         public const string ManagerIntegrityColumn = "Integrity";
         public const string ManagerCheckAndRepair = "Check and repair...";
         public const string ManagerCheckAndRepairTooltip =
@@ -523,6 +566,30 @@
         public const string LegacyMigrationContinue = "Upgrade this link and continue";
         public const string LegacyMigrationContinueHint =
             "Replace the v1 entity with v2 in the same transaction as this action.";
+        public const string LegacyLinkUpgradeFailed =
+            "The legacy link could not be upgraded.";
+        public const string LegacyLinkUpgradeFailedToSchemaV2 =
+            "The legacy link could not be upgraded to schema v2.";
+        public const string SchemaV2UnavailableAfterMigration =
+            "Schema v2 was not available after legacy-link migration.";
+        public const string LinkStorageNotAvailable =
+            "The link storage was not available.";
+        public const string ManagerLinkedScheduleUnavailable =
+            "The linked schedule was not available.";
+        public const string LinkStorageUnavailable =
+            "The link storage was unavailable.";
+        public const string LinkTransactionDidNotCommit =
+            "The link transaction did not commit.";
+        public const string SettingsTransactionNotStarted =
+            "The settings transaction did not start.";
+        public static string SettingsTransactionReturnedStatus(string status)
+        {
+            return "The settings transaction returned status " + status + ".";
+        }
+        public const string RepairTransactionNotStarted =
+            "Revit did not allow starting the repair transaction.";
+        public const string RepairDocumentNotModifiableAfterStart =
+            "The document was not modifiable after the repair transaction started.";
 
         public const string LayoutSourceUnknownInstruction =
             "These Excel widths have no accepted workbook identity baseline.";

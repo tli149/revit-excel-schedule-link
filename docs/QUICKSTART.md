@@ -13,7 +13,7 @@ administrator rights.*
 
 ## 1. Install (one time)
 
-1. Download `ExcelScheduleLink_v0.9.3.zip` from the project's **Releases** page.
+1. Download `ExcelScheduleLink_v0.9.4.zip` from the project's **Releases** page.
    Use the release ZIP, not the green **Code → Download ZIP** button. That
    button contains the source code.
 2. **Before extracting:** right-click the ZIP → **Properties** → tick

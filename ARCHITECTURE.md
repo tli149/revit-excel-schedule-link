@@ -2,278 +2,268 @@
 
 ## 1. Current baseline
 
-Excel Schedule Link v0.9.3 is a pilot add-in for Autodesk Revit 2024. It reads
-displayed worksheet content from an external XLSX workbook and renders it into
-the header section of a Revit ViewSchedule. Link metadata is stored on that
-schedule so the table can be reloaded later.
+The v0.9.4 source baseline is a Revit 2024 add-in. The add-in targets .NET
+Framework 4.8; the reusable Contracts, Excel reader, and Layout libraries target
+.NET Standard 2.0; the unit-test project targets .NET 8. The add-in reads an
+`.xlsx` worksheet, renders the displayed cell text into a Revit `ViewSchedule`,
+and stores link metadata on that schedule for later reloads.
 
-The runtime add-in targets .NET Framework 4.8. Reusable contracts, Excel
-reading, and layout math target .NET Standard 2.0. Unit tests target .NET 8.
+The public source tree is organized around three boundaries: workbook input,
+pure calculations and policy, and Revit/UI integration. Workbook file I/O and
+parsing are completed before a workbook-based model-mutation transaction opens.
+Each individual model mutation is placed in one transaction boundary; failures
+attempt rollback and expose whether the final rollback status was observed.
 
-This document describes the implemented code boundaries in the public tree.
-Earlier pilot decisions are historical context; the current source, tests, and
-developer documentation are the authority for v0.9.3 behavior.
-
-## 2. Runtime shape
-
-The main link path is:
-
-    Revit ribbon command
-        -> WinForms selection dialog
-        -> IExcelReadService
-        -> OpenXmlExcelReadService
-        -> SheetModel
-        -> one Revit transaction
-        -> ScheduleFactory + HeaderTableRenderer + ExcelLinkSchema
-        -> linked ViewSchedule
-
-Reload uses the stored ExcelLinkInfo to resolve the workbook, re-read it outside
-the transaction, and then rebuild the existing header table inside one
-transaction. Layout commands resolve a linked schedule, calculate candidate
-widths with pure layout code, validate them, and apply an approved set in one
-transaction.
-
-This separation is deliberate: file I/O and parsing may fail without touching
-the model, while model writes remain all-or-nothing.
-
-## 3. Project boundaries
+## 2. Project boundaries
 
 | Project | Target | Responsibility | Dependency boundary |
 |---|---|---|---|
-| src/ExcelScheduleLink.Contracts | netstandard2.0 | Sheet model, DTOs, read-service contract, read exception, stored-workbook path policy and approval interface | No external dependencies |
-| src/ExcelScheduleLink.Excel.OpenXml | netstandard2.0 | XLSX worksheet discovery, parsing, and display formatting | Owns DocumentFormat.OpenXml 3.5.1 |
-| src/ExcelScheduleLink.Layout | netstandard2.0 | Pure column-width and row-height calculations | No Revit or Open XML types |
-| src/ExcelScheduleLink.Revit2024 | net48 | Ribbon, commands, dialogs, Revit schedule rendering, persistence | Revit API plus the three libraries above |
-| src/ExcelScheduleLink.Probe.OpenXmlPayload | net48 | Isolated Open XML diagnostic payload | Developer/QA only; not shipped |
-| tests/ExcelScheduleLink.Excel.OpenXml.Tests | net8.0 | Reader, display formatter, cell reference, and layout tests | xUnit |
-| tools/UiHarness | net48 | Renders real dialog source outside Revit for clipping and scaling checks | Developer-only; excluded from the solution |
+| `src/ExcelScheduleLink.Contracts` | netstandard2.0 | Reader contract plus Revit-free policy, organized into `Reader/` and `Policy/`; policy remains in this assembly so the net8 tests can exercise it | No external dependencies |
+| `src/ExcelScheduleLink.Excel.OpenXml` | netstandard2.0 | XLSX sheet discovery, bounded parsing, fingerprinting, and display formatting | Owns `DocumentFormat.OpenXml` 3.5.1 |
+| `src/ExcelScheduleLink.Layout` | netstandard2.0 | Pure column-width and row-height calculations | No Revit or Open XML types |
+| `src/ExcelScheduleLink.Revit2024` | net48 | Ribbon, commands, dialogs, Revit rendering, persistence, reload, layout, and repair | Revit API plus Contracts, Excel.OpenXml, and Layout |
+| `src/ExcelScheduleLink.Probe.OpenXmlPayload` | net48 | Isolated Open XML payload used by diagnostic commands | Not shipped to end users |
+| `tests/ExcelScheduleLink.Excel.OpenXml.Tests` | net8.0 | Reader, policy, display, security, and layout tests | xUnit; references the three reusable libraries |
+| `tools/UiHarness` | net48 | Renders the real WinForms dialogs outside Revit | Separate developer tool; not in the solution |
 
-The Revit project resolves RevitAPI.dll and RevitAPIUI.dll from a local Revit
-2024 installation when available. Otherwise it falls back to compile-time
-Nice3point Revit API reference packages. Revit API assemblies are never copied
-into the product output.
+The Revit project references the Excel.OpenXml implementation project, but not
+`DocumentFormat.OpenXml` directly. Local Revit 2024 API assemblies are used when
+available; otherwise the project uses the pinned reference packages. Revit API
+assemblies are not copied into the product output.
 
-## 4. Link creation
+## 3. Runtime shape
 
-LinkExcelCommand coordinates the production link operation:
+The four principal flows are:
 
-1. The user chooses an XLSX file, worksheet, optional range, and width scale.
-2. OpenXmlExcelReadService reads the workbook into a SheetModel before a Revit
-   transaction exists.
-3. ExcelLinkInfo records absolute and model-relative paths, range settings,
-   source timestamp, reload modes, and width scale.
-4. One transaction creates a method-B schedule, renders the worksheet into the
-   schedule header, and stores the link entity.
-5. Any exception during model mutation rolls back that entire transaction.
+- **Link:** `LinkExcelCommand` validates the selected path, obtains the sheet
+  selection, reads a `SheetModel` and `SourceFingerprint`, then uses
+  `ModelMutation` for schedule creation, header rendering, and v2 storage.
+- **Reload:** `ReloadService` resolves and reads the workbook before its
+  transaction. `TargetedReloadFlow` adds the consented current-table fallback
+  and final integrity qualification. `ReloadAllFlow` processes links
+  independently without offering that fallback; rows requiring source-identity
+  or width-risk confirmation are skipped. UNC approval and the session
+  worksharing advisory can still display dialogs.
+- **Layout:** `LayoutService` resolves a linked schedule, validates candidate
+  widths, and applies one width set plus any requested reload-policy change in a
+  single mutation. `QuickLayoutRunner` and `LayoutDialogCommand` provide the
+  command and dialog entry points.
+- **Repair:** `ScheduleRepairCoordinator` owns explicit consent and per-schedule
+  review. `ScheduleRepairService` captures an existing table in a read
+  transaction and uses the snapshot only after its final status is verified as
+  `RolledBack`, then restores it in one mutation transaction when the workbook
+  is unavailable.
 
-HeaderTableRenderer limits the rendering area to 500 rows by 50 columns,
-applies displayed strings and merged cells, and maps Excel-derived column
-widths into Revit feet with clamping.
+### Where each rule lives
 
-### 4.1 Workbook input boundary
+| Rule | Owning code |
+|---|---|
+| Transaction lifecycle, fatal regeneration, and v1-to-v2 link loading | `ModelMutation` and `ModelMutationContext` |
+| Targeted reload, fallback, rescan, and final-health sequence | `TargetedReloadFlow` |
+| Reload-all loop, counters, details, and per-row results | `ReloadAllFlow` |
+| Workbook package, XML, string, coordinate, and fraction resource limits | `WorkbookReadLimits` |
+| Activation, fallback eligibility, final-success qualification, explicit-repair document policy, and safe ownership-advisory timing | `ScheduleIntegrityFlowDecisions` |
+| Fresh integrity qualification before activating an existing linked schedule | `ScheduleActivationGuard.CheckAndOfferRepair` |
+| Layout source-identity authorization and legacy-migration consent | `LayoutMutationAuthorization.Authorize` |
+| Explicit repair consent, per-schedule review, and final repair qualification | `ScheduleRepairCoordinator` |
+| Scan-and-store operation | `ScheduleIntegritySessionCache.Rescan` |
+| Automatic retry/notification state | `AutomaticIntegrityNotificationState` |
+| Workbook unavailable classification | `ReloadOutcome.IsWorkbookUnavailable` |
+| Render and scan limits | `StyleIntegrityLimits` |
+| Schema-version contract for normalization and storage | `LinkFieldSnapshot` and `ExcelLinkInfo` |
+| Extensible-storage GUIDs and field serialization | `ExcelLinkSchema` |
+| User-facing wording | `UserMessages` |
+| Reader exception boundary | `OpenXmlExcelReadService` and `ExcelReadException` |
+| Relative-path safety | `RelativePathPolicy` |
+| Stored-workbook path and UNC approval policy | `StoredWorkbookPathPolicy` and `INetworkServerApprovalStore` |
+| Reload authorization decision | `ReloadDecisionTable` |
+| v1-to-v2 field normalization | `LinkMigrationNormalizer` |
+| Style facts and decision table | `StyleIntegrityPolicy.cs` and `StyleIntegrityDecisionTable` |
+| Pure width, row-height, character, and layout operations | `LayoutMetrics`, `ColumnWidthMath`, `RowHeightMath`, `CharWidth`, and `LayoutOps` |
 
-`WorkbookReadLimits` is the single owner of the Open XML resource policy. Every
-reader entry point copies the source only after the path syntax gate and source
-byte check, scans ZIP entry count, per-entry and cumulative expansion, and
-compression ratio before `SpreadsheetDocument.Open`, and supplies a nonzero
-`OpenSettings.MaxCharactersInPart`. It also bounds worksheet merges, styles,
-shared strings, string lengths, Excel coordinates, and the 500-by-50 output
-array before allocating it. The policy allows ordinary multi-sheet,
-tens-of-megabytes workbooks and large worksheet row/cell counts while keeping
-only cells in the selected top-left output window. The workbook `<dimension>`
-value is validated only for syntax and legal coordinates because it may be
-stale; actual cells define the used range. Unselected worksheet parts are not
-loaded. Explicit ranges filter cells into the bounded output array and do not
-retain cells outside that range.
+## 4. Workbook input boundary
 
-Column spans are validated as unsigned values against Excel's 1..16,384
-column domain before conversion to signed indexes; only their intersection
-with the accepted output columns is iterated. Fraction formats accept up to
-three denominator placeholders and use a bounded continued-fraction
-approximation with a fixed iteration budget; longer formats fall back to
-General.
+`IExcelReadService` exposes worksheet-name discovery and
+`ReadSheetSnapshot`. `OpenXmlExcelReadService` implements that contract with a
+temporary-copy guard: it copies the source with bounded retries, opens the copy
+read-only, parses it, fingerprints the same copy, and then disposes the guard,
+which attempts to delete the copy. Reader failures
+surface as `ExcelReadException` and abort the workbook-based mutation before its
+transaction starts. For a known affected schedule, a targeted flow may
+subsequently offer a separately consented rebuild from the current table.
 
-The schedule body is intentionally minimal. Revit exposes writable table
-content in the schedule header, while the body is not suitable for this linked
-table. The resulting editor-only A strip is a known Revit UI effect; it does not
-appear on sheets or in printed/PDF output according to the recorded acceptance
-checks.
+`WorkbookReadLimits` is the single Open XML resource policy. It checks the source
+and ZIP package before DOM loading, bounds XML expansion, worksheet/style/shared
+string counts, strings, coordinates, merges, fraction parsing, and the output
+array. The rendered output is bounded to 500 rows by 50 columns. Only the
+selected worksheet and selected output window are retained.
 
-## 5. Reload and link management
+`RawCellReader` owns OOXML cell, merge, width, style, and cached-value reading.
+`CellDisplayFormatter` converts those values into strings close to Excel's
+display, including supported numeric, date/time, percentage, unit-literal,
+leading-zero, and fraction formats. Unsupported formats use the documented
+fallback. CJK-aware measurement is handled later by the Layout library.
 
-ReloadService is shared by the single-link command and Link Manager. Its
-responsibilities are:
+Revit entry points validate selected or stored candidates through `PathResolver`
+and `StoredWorkbookPathPolicy` before `File.Exists`, timestamps, copying, or
+reading. Local paths and UNC paths are distinguished without contacting an
+unapproved server. Resolving an unapproved stored UNC candidate for an action
+requires a cancel-default approval dialog. Explicitly selecting a UNC workbook
+in the file dialog approves its server without a second prompt. Approvals are
+stored per Windows user, never in the model.
 
-- resolve the source using stored absolute and model-relative paths;
-- read the workbook before changing the document;
-- detect the source timestamp change;
-- preserve current dimensions when a keep-manual mode is selected;
-- rebuild and re-save the link data transactionally;
-- classify success, unchanged, missing-source, and failure outcomes.
+## 5. Link creation, reload, and repair
 
-All stored or resolved workbook candidates pass through
-`StoredWorkbookPathPolicy` in `PathResolver` before `File.Exists`, timestamps,
-copy, hashing, or Open XML access. Link Manager inspection returns
-`Network - not approved` without probing an unapproved UNC server. An action
-that needs the file shows a cancel-default confirmation naming the server and
-full path; approvals are stored in the existing per-user settings file and
-never in extensible storage. Duplicate checking compares validated strings and
-does not probe source paths. User-facing approval and rejection text is owned
-by `UserMessages`.
+`LinkExcelCommand` collects the workbook, worksheet, optional range, and width
+scale. It reads the workbook before the first model transaction. The mutation
+creates a method-B schedule, renders its header, and writes the v2 link entity.
+`HeaderTableRenderer` applies displayed text, merged cells, width/height policy,
+and the post-regeneration style-integrity check before the mutation can commit.
 
-Link Manager discovers linked schedules through their extensible-storage entity,
-shows source status, edits per-link width/height policy, and invokes the shared
-reload service. Reload-all keeps each link independent so one missing or invalid
-source does not damage other schedules.
+`ReloadService` resolves the stored absolute and model-relative candidates,
+reads the workbook outside the transaction, compares v2 source fingerprints,
+and asks `ReloadDecisionTable` plus `ReloadDialogs` to authorize the action. The
+render and metadata update then run through `ModelMutation`. `ReloadOutcome`
+preserves the identity, transaction, rollback, render, truncation, and view-width
+facts needed by the command and Link Manager.
 
-### 5.1 Schedule style integrity
+`TargetedReloadFlow` runs the common sequence: reload, offer the separately
+consented current-table rebuild only for a known affected schedule with an
+unavailable workbook, rescan and store the final result when the caller requests
+that step, and set the targeted flow's final-success flag only when the final
+result is `Healthy`. The activation guard deliberately preserves its early
+return after an unsuccessful fallback. A fatal regeneration stops the flow
+before any rescan or later document access. `ReloadAllFlow` processes each
+resolved schedule independently, rescans cancelled and failed rows, never offers
+the current-table fallback, and stops on fatal regeneration.
 
-Revit gives cells created by `InsertRow`/`InsertColumn` their native style only
-when the document regenerates. A header table persisted before that point
-contains styleless cells, and opening such a view can crash Revit 2024.
+`ScheduleRepairCoordinator` applies the explicit repair document policy,
+including read-only, detached-copy, and worksharing editability decisions. Its
+fallback uses `ScheduleRepairService`: the existing header is captured in a
+read transaction and the snapshot is used only when its final status is verified
+as `RolledBack`, then restored, validated, and saved in one mutation transaction.
+The repair flow qualifies a repair as successful only after a healthy final scan;
+a committed mutation can still be downgraded when that scan is not healthy.
 
-- The pure decision table lives in ExcelScheduleLink.Contracts
-  (`ScheduleStyleIntegrityModels`, `ScheduleIntegrityFlowModels`). A cell is
-  classified as styleless only when all four conditions hold:
-  - all four borders are unset;
-  - it has no explicit override;
-  - at least one usable baseline exists;
-  - its font/size pair is an unambiguous mismatch against every available
-    baseline.
+## 6. Schedule-integrity subsystem
 
-  The baselines are the resolvable title/header text types and a complete,
-  non-styleless, non-ambiguous top-left reference cell. Missing or ambiguous
-  baseline evidence yields `Indeterminate`. Sizes are compared in 1/96-inch
-  table units with exact, ambiguous, and mismatch outcomes.
-- `ScheduleStyleIntegrityScanner` serves two cases, because `GetTableData`
-  needs a modifiable document. Standalone checks read the table in dedicated
-  transactions and request rollback in `finally`. If a final `RolledBack`
-  status cannot be observed, the check becomes `Indeterminate`.
-  `ScanAfterMutationInOpenTransaction` regenerates first and runs inside the
-  caller's open mutation transaction. HeaderTableRenderer, layout apply, and
-  repair use it as their post-mutation gate. That transaction may commit only
-  when the result is `Healthy`. Otherwise the operation fails and a rollback is
-  attempted, and messages claim a completed rollback only after observing
-  `RolledBack` (`TransactionRollback`).
-- Scans are bounded by `StyleIntegrityLimits`: an automatic scan covers 64
-  schedules and 100,000 header cells, a manual scan 256 schedules, and a single
-  schedule 25,000 header cells. Anything beyond a limit is reported as
-  `Not checked`.
-- `ScheduleIntegrityLifecycle` scans on DocumentOpened, notifies at Idling, and
-  keeps per-session results in `ScheduleIntegritySessionCache`.
-  `ScheduleActivationGuard` stops add-in-initiated view activation of an
-  unsafe schedule. `ScheduleRepairCoordinator` and `ScheduleRepairService`
-  run the explicit, per-schedule repair and the no-workbook rebuild.
-- Repair is primarily an ordinary reload. The current-table rebuild is a
-  separately consented fallback. It applies only to a targeted repair of a
-  known-`Affected` schedule whose workbook is missing or unreadable, never to
-  Reload all.
-- Explicit repair (the per-schedule review and the fallback) applies
-  `ForExplicitRepairDocument`. It refuses `IsReadOnly` documents. A
-  detached document takes precedence over `IsReadOnlyFile`, which is refused
-  only when the document is not detached. Explicit repair also checks
-  `GetCheckoutStatus` before mutating and refuses `OwnedByOtherUser`. Ordinary
-  reload lets the transaction result decide. It consults checkout status only
-  after a start refusal or an observed rollback. The owner is named only when
-  Revit returns a reliable name.
-- Diagnostic probes for these paths are registered only in the probe
-  manifest template.
+`Policy/StyleIntegrityPolicy.cs` contains the dependency-free style facts,
+results, reason codes, limits, and decision table. A result is `Healthy`,
+`Affected`, or `Indeterminate`. The styleless-cell rule requires a complete cell,
+all four borders unset, no explicit override, a usable baseline, and an
+unambiguous font/size mismatch. Structural incompleteness yields `Indeterminate`.
+Once the structural checks pass, a known styleless cell yields `Affected` even
+when other observations are unreadable or ambiguous. Without a known styleless
+cell, unresolved evidence prevents a `Healthy` result and yields `Indeterminate`.
 
-## 6. Layout subsystem
+`ScheduleStyleIntegrityScanner` is the Revit adapter. A standalone scan runs in
+a dedicated transaction and only qualifies its result after observing a final
+`RolledBack` status. A post-mutation scan regenerates inside the caller's open
+transaction and returns `Healthy` only when the resulting header is verifiable.
+The manual and automatic scan budgets are owned by `StyleIntegrityLimits`: 256
+and 64 schedules respectively, 25,000 cells for one schedule, and 100,000
+automatic header cells.
 
-ExcelScheduleLink.Layout holds algorithms and tuning constants that can be
-tested without Revit. The Revit layer supplies current table state and content
-measurements, while the UI edits a candidate set rather than mutating the model
-continuously.
+`ScheduleIntegritySessionCache` owns session-only results for each open document.
+Its `Rescan` method performs the scanner call and cache write together.
+`ScheduleIntegrityDocumentState` owns its result snapshot and delegates retry and
+notification transitions to `AutomaticIntegrityNotificationState`. The lifecycle
+subscribes to document-open/close and Idling events, scans at open, defers UI to
+Idling, retries once after a foreign transaction, and consumes the notification
+token only after the dialog returns. Explicit repairs are started only after
+user consent.
 
-Implemented operations include:
+## 7. Layout subsystem
 
-- fit content, including CJK-aware measurement and merged-span constraints;
-- distribute evenly;
-- restore Excel-derived widths;
-- fit to a requested total using constrained redistribution;
-- direct per-column values in project-appropriate units.
+`ExcelScheduleLink.Layout` contains no Revit or Open XML types. `LayoutMetrics`
+holds tuning constants; `CharWidth` measures text including CJK widths;
+`ColumnWidthMath` converts and clamps column widths; `RowHeightMath` supplies
+row-height values; and `LayoutOps` implements reset-to-Excel, fit-content merge
+constraints, even distribution, fit-to-total redistribution, clamping, and
+validation. Returned widths are finite and constrained to the supported range.
 
-Validation occurs before writing. The final width set is applied as a single
-Revit operation so an invalid column cannot intentionally leave a partial
-layout. Reload policy and the immediate layout operation are separate choices:
-manual edits can switch a link to keep-manual widths, while restore-Excel does
-not silently rewrite that policy.
+`LayoutService` reads current header widths, computes candidates through the pure
+library, validates before starting a mutation transaction, and uses `ModelMutation` for widths,
+body-column synchronization, style validation, and optional link-policy storage.
+The Column Widths dialog edits candidate widths and can invoke a command-owned
+Apply callback while remaining open. `LayoutDialogCommand` re-verifies and
+authorizes each Apply. After a successful Apply, Cancel or Discard drops only
+unapplied edits and preserves the committed changes. Quick-layout commands use
+the same service.
 
-## 7. Persistence contract
+## 8. Persistence contract
 
-ExcelLinkSchema stores schema version, renderer version, source paths, path
-preference, worksheet and range, timestamps, width/height reload modes, and
-width scale directly on the linked ViewSchedule.
+`ExcelLinkSchema` stores link metadata on the linked `ViewSchedule`. The shipped
+v1 schema GUID is `6fd491d4-0092-45ae-82ad-2d51ce4a0615`. Its frozen fields are
+`SchemaVersion`, `RendererVersion`, `AbsolutePath`, `RelativePath`, `PathMode`,
+`SheetName`, `RangeMode`, `RangeAddress`, `SourceLastWriteUtcTicks`,
+`LastLoadedUtcTicks`, `ColumnWidthMode`, `RowHeightMode`, and `WidthScale`.
 
-The shipped schema GUID is:
+Schema v2 is current and uses GUID `4d40b55b-c928-4e46-8c15-2c85dbf510ad`.
+It preserves every v1 field and adds `CreatedSourceSha256`,
+`LastAcceptedSourceSha256`, and `LastAcceptedSourceSizeBytes`. The v1 GUID and
+field set are immutable; a future schema change requires another GUID and an
+explicit migration. `ExcelLinkInfo` and `LinkFieldSnapshot` both express the
+legacy version 1 and current version 2 contract. `ExcelLinkMigration` invokes
+`LinkMigrationNormalizer`, writes v2, and removes v1 inside the caller's open
+mutation transaction.
 
-    6fd491d4-0092-45ae-82ad-2d51ce4a0615
+## 9. UI and Revit integration
 
-That GUID and its v1 field set are immutable. Adding, removing, or changing a
-field requires a new schema GUID and a migration keyed by SchemaVersion.
+`RibbonApplication` creates the production ribbon and connects Link, Reload,
+Link Manager, Column Widths, and Quick Layout commands. `LinkManagerDialog`
+lists linked schedules, displays source and integrity status, saves per-link
+width/height settings, and delegates selected reload, reload-all, and repair to
+the services above.
 
-## 8. UI and Revit integration
+WinForms dialogs inherit Revit's DPI awareness and default font behavior. They do
+not force a DPI context, form-level font, `AutoScaleMode`, or modal owner. Layouts
+are content-sized and controls grow with their text. Shared wording belongs to
+`UserMessages`; file paths, worksheet names, and other data values retain their
+Unicode content.
 
-RibbonApplication creates the Excel Schedule Link tab, product commands, and
-layout commands. Availability checks are intentionally inexpensive; deeper
-link validation happens only when a command runs.
+## 10. Safety properties
 
-Dialogs are WinForms and intentionally inherit Revit's DPI awareness. The
-current behavior avoids forced DPI context, explicit form-level font,
-AutoScaleMode, AutoScaleDimensions, and modal owner injection. Layouts are
-content-sized to survive font scaling. Any change to these rules needs both
-UiHarness rendering and real Revit/high-DPI confirmation.
+- For workbook-based actions, workbook parsing and path validation happen before
+  a model mutation begins.
+- Each schedule mutation uses a single transaction. Mutation failures attempt
+  rollback; restoration is confirmed only when the final transaction status is
+  `TransactionStatus.RolledBack`. Pending or unreadable status leaves rollback
+  completion unverified.
+- `ModelMutation` classifies native and probe regeneration failures as fatal and
+  performs only internal transaction cleanup before returning; its callers stop
+  the action without follow-up document reads.
+- A committed reload or repair can subsequently fail final integrity
+  qualification without undoing its committed changes. Bulk reload processes
+  schedules independently.
+- The temporary-copy reader does not hold the source workbook open, and formulas
+  are not recalculated; cached workbook values are displayed.
+- Package expansion, parsed strings, coordinates, schedule scans, and rendered
+  dimensions are bounded before untrusted input can create an unbounded model
+  operation.
+- Unapproved UNC candidates are inspected or presented without a network probe;
+  approval is per Windows user rather than extensible-storage data.
+- A render, repair, or layout apply can commit only after the post-regeneration
+  style check is `Healthy`. A cached session result is never used as the final
+  health gate.
+- The production manifest registers the ribbon application. Diagnostic command
+  classes remain compiled into the Revit DLL but are not registered by the
+  production manifest or exposed by the production ribbon. The separate probe
+  manifest and Open XML diagnostic payload are not included in the normal
+  end-user package.
 
-Embedded 16 px and 32 px PNG resources provide ribbon icons. Add-in manifest
-templates are copied from the Revit project and have their deployment path
-placeholder resolved during installation.
+## 11. Build and repository boundary
 
-## 9. Safety properties
+`ExcelScheduleLink.sln` contains the five source projects and the unit-test
+project. `tools/UiHarness` is built separately. `global.json` requests .NET
+SDK 8.0.400 with `latestFeature` roll-forward within 8.0; prerelease SDKs are
+disabled. `scripts/build.ps1` builds the solution in Release, runs tests
+by default, creates the runtime distribution, and optionally creates a source-free
+ZIP with a SHA-256 checksum. Build output, package output, generated PDFs,
+screenshots, Revit models, archives, runtime evidence, credentials, and
+environment files are outputs or local data, not implementation sources.
 
-The most important behavioral guarantees are:
-
-- a workbook read failure changes nothing in Revit;
-- a render or persistence failure rolls back the model operation;
-- one failed reload does not change that schedule or other linked schedules;
-- parsing uses a temporary copy so an open Excel workbook is not held or
-  locked by the add-in;
-- workbook package expansion and render allocation are bounded before DOM load;
-- unapproved UNC paths are displayed without probing the network, and the
-  approval decision is per Windows user rather than model data;
-- formulas are not recalculated; only the value cached in the workbook is
-  rendered;
-- no render, reload, repair, or layout apply is allowed to commit a header
-  cell that the post-regeneration style check cannot verify;
-- source path and Unicode worksheet content are preserved;
-- QA and probe command classes are compiled into the Revit DLL, but the
-  production manifest does not register them and the probe payload is not
-  shipped to end users.
-
-## 10. Build, tests, and distribution
-
-ExcelScheduleLink.sln contains the five source projects and the unit-test
-project. UiHarness is deliberately built separately. `testdata` contains the
-small XLSX fixtures used by the public tests. Build intermediates, distribution
-trees, generated PDFs, and harness renderings are outputs rather than sources
-of truth.
-
-`global.json` pins the .NET 8 SDK feature band used by tests. The Revit API
-fallback is pinned to the exact Nice3point package version used by both API
-reference packages. `scripts/build.ps1` runs the solution build and tests,
-creates a runtime-only distribution, and optionally creates a ZIP with a
-SHA-256 checksum. The ZIP is not called reproducible unless two clean builds
-have been compared.
-
-## 11. Repository boundary
-
-Track implementation, tests, scripts, public documentation, fixture generators,
-and small reproducible fixtures. The public snapshot excludes `design/`,
-`results/`, and `docs/validation/`; no source or test must depend on them.
-Ignore build intermediates, distribution copies, generated PDFs, harness
-renderings, bulk runtime evidence, RVT models, archives, and local agent state.
-
-Ignoring a file only keeps it out of new commits. It does not delete or relocate
-the existing workspace asset. Routine implementation history belongs in focused
-commits; architecture contracts and acceptance criteria remain in versioned
-documentation.
+The repository history should contain source, tests, scripts, public
+documentation, and small reproducible fixtures. Ignoring an output does not
+delete it. Public code must remain independent of local evidence and machine-
+specific paths.

@@ -66,8 +66,7 @@ namespace ExcelScheduleLink.Revit2024.Link
             }
 
             StyleIntegrityResult after =
-                ScheduleStyleIntegrityScanner.ScanWithRolledBackTransaction(doc, schedule);
-            ScheduleIntegritySessionCache.SetResult(doc, schedule.Id, after);
+                ScheduleIntegritySessionCache.Rescan(doc, schedule);
             if (after == null || after.State != StyleIntegrityState.Healthy)
             {
                 repair.Success = false;
@@ -137,12 +136,11 @@ namespace ExcelScheduleLink.Revit2024.Link
             if (!suppliedReviewSet)
             {
                 // The fresh state summary is shown before any repair decision.
-                // Its repair counters are deliberately zero because no
-                // mutation has happened yet. When there is something to
-                // repair, the summary is part of the repair question itself:
-                // a separate "check finished" dialog in front of the question
-                // made acceptance operators close the flow before choosing
-                // (journal.0236/0237).
+                // Its repair counters are deliberately zero because no mutation
+                // has happened yet. When there is something to repair, the
+                // summary is part of the repair question itself; a separate
+                // "check finished" dialog would interrupt the choice and make
+                // the repair flow harder to complete.
                 if (affected.Count == 0)
                 {
                     TaskDialog.Show(UserMessages.DialogTitle,
@@ -184,7 +182,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                     ScheduleIntegrityFlowDecisions.ApplyBulkRepairOutcome(
                         outcome.Summary,
                         ScheduleIntegrityFlowDecisions.BulkRepairOutcome.Declined);
-                    outcome.Details.Add("Repair declined: " + schedule.Name);
+                    outcome.Details.Add(UserMessages.RepairDeclined(schedule.Name));
                     continue;
                 }
 
@@ -193,7 +191,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                     ScheduleIntegrityFlowDecisions.ApplyBulkRepairOutcome(
                         outcome.Summary,
                         ScheduleIntegrityFlowDecisions.BulkRepairOutcome.Declined);
-                    outcome.Details.Add("Repair declined: " + schedule.Name);
+                    outcome.Details.Add(UserMessages.RepairDeclined(schedule.Name));
                     continue;
                 }
 
@@ -202,24 +200,26 @@ namespace ExcelScheduleLink.Revit2024.Link
                     ScheduleIntegrityFlowDecisions.ApplyBulkRepairOutcome(
                         outcome.Summary,
                         ScheduleIntegrityFlowDecisions.BulkRepairOutcome.Failed);
-                    outcome.Details.Add("Repair failed: " + schedule.Name);
+                    outcome.Details.Add(UserMessages.RepairFailed(schedule.Name));
                     TaskDialog.Show(UserMessages.DialogTitle, refusal);
                     continue;
                 }
 
-                ReloadOutcome reload = ReloadService.Reload(
+                TargetedReloadFlowResult flow = TargetedReloadFlow.Run(
                     doc, schedule, ReloadScope.SingleLink, null, prior);
-                if (reload.IsFatalRegenerationFailure)
+                ReloadOutcome reload = flow.Reload;
+                if (flow.FatalRegeneration)
                 {
                     outcome.FatalRegenerationFailure = true;
-                    TaskDialog.Show(UserMessages.DialogTitle, reload.Detail);
+                    if (reload.IsFatalRegenerationFailure)
+                    {
+                        TaskDialog.Show(UserMessages.DialogTitle, reload.Detail);
+                    }
                     return outcome;
                 }
                 if (reload.IsSuccess)
                 {
-                    StyleIntegrityResult after =
-                        ScheduleStyleIntegrityScanner.ScanWithRolledBackTransaction(doc, schedule);
-                    ScheduleIntegritySessionCache.SetResult(doc, schedule.Id, after);
+                    StyleIntegrityResult after = flow.After;
                     ScheduleIntegrityFlowDecisions.BulkRepairOutcome repairOutcome =
                         ScheduleIntegrityFlowDecisions.ClassifyBulkRepair(
                             ScheduleIntegrityFlowDecisions.BulkRepairChoice.ReloadFromWorkbook,
@@ -228,27 +228,17 @@ namespace ExcelScheduleLink.Revit2024.Link
                         outcome.Summary, repairOutcome);
                     if (repairOutcome == ScheduleIntegrityFlowDecisions.BulkRepairOutcome.Failed)
                     {
-                        outcome.Details.Add("Repair failed: " + schedule.Name
-                            + " (post-repair scan was not Healthy)");
+                        outcome.Details.Add(
+                            UserMessages.RepairFailedPostRepairScan(schedule.Name));
                     }
                 }
-                else if (reload.Kind == ReloadResultKind.SourceMissing
-                    || reload.Kind == ReloadResultKind.ReadFailed)
+                else if (reload.IsWorkbookUnavailable)
                 {
-                    // The per-schedule workbook choice never authorizes this
-                    // fallback. It is offered separately for this schedule.
                     RepairAttemptOutcome fallback =
-                        ScheduleIntegrityFlowDecisions.ShouldOfferCurrentTableFallback(
-                            prior == null ? (StyleIntegrityState?)null : prior.State,
-                            false)
-                        ? TryFallback(doc, schedule)
+                        flow.FallbackOffered
+                        ? flow.Fallback
                         : Failed(reload.Detail);
-                    if (fallback != null && fallback.FatalRegenerationFailure)
-                    {
-                        outcome.FatalRegenerationFailure = true;
-                        return outcome;
-                    }
-                    StyleIntegrityResult after = ScanAndCache(doc, schedule);
+                    StyleIntegrityResult after = flow.After;
                     if (fallback != null && fallback.Success
                         && after != null && after.State == StyleIntegrityState.Healthy)
                     {
@@ -263,33 +253,30 @@ namespace ExcelScheduleLink.Revit2024.Link
                         ScheduleIntegrityFlowDecisions.ApplyBulkRepairOutcome(
                             outcome.Summary,
                             ScheduleIntegrityFlowDecisions.BulkRepairOutcome.Declined);
-                        outcome.Details.Add("Repair declined: " + schedule.Name);
+                        outcome.Details.Add(UserMessages.RepairDeclined(schedule.Name));
                     }
                     else
                     {
                         ScheduleIntegrityFlowDecisions.ApplyBulkRepairOutcome(
                             outcome.Summary,
                             ScheduleIntegrityFlowDecisions.BulkRepairOutcome.Failed);
-                        outcome.Details.Add("Repair failed: " + schedule.Name);
+                        outcome.Details.Add(UserMessages.RepairFailed(schedule.Name));
                     }
                 }
                 else if (reload.Kind == ReloadResultKind.Cancelled
-                    || reload.Kind == ReloadResultKind.NetworkAccessCancelled
                     || reload.Kind == ReloadResultKind.ConfirmationRequired)
                 {
-                    ScanAndCache(doc, schedule);
                     ScheduleIntegrityFlowDecisions.ApplyBulkRepairOutcome(
                         outcome.Summary,
                         ScheduleIntegrityFlowDecisions.BulkRepairOutcome.Declined);
-                    outcome.Details.Add("Repair declined: " + schedule.Name);
+                    outcome.Details.Add(UserMessages.RepairDeclined(schedule.Name));
                 }
                 else
                 {
-                    ScanAndCache(doc, schedule);
                     ScheduleIntegrityFlowDecisions.ApplyBulkRepairOutcome(
                         outcome.Summary,
                         ScheduleIntegrityFlowDecisions.BulkRepairOutcome.Failed);
-                    outcome.Details.Add("Repair failed: " + schedule.Name);
+                    outcome.Details.Add(UserMessages.RepairFailed(schedule.Name));
                     if (!string.IsNullOrEmpty(reload.Detail))
                     {
                         outcome.Details.Add(reload.Detail);
@@ -306,12 +293,12 @@ namespace ExcelScheduleLink.Revit2024.Link
                     || result == null || result.State == StyleIntegrityState.Indeterminate)
                 {
                     outcome.Summary.NotChecked++;
-                    outcome.Details.Add("Not checked: " + schedule.Name);
+                    outcome.Details.Add(UserMessages.RepairNotChecked(schedule.Name));
                 }
                 else if (result.State == StyleIntegrityState.Affected)
                 {
                     outcome.Summary.Unsafe++;
-                    outcome.Details.Add("Unsafe: " + schedule.Name);
+                    outcome.Details.Add(UserMessages.RepairUnsafe(schedule.Name));
                 }
                 else
                 {
@@ -339,15 +326,6 @@ namespace ExcelScheduleLink.Revit2024.Link
                 string.Empty);
             dialog.DefaultButton = TaskDialogResult.CommandLink2;
             return dialog.Show() == TaskDialogResult.CommandLink1;
-        }
-
-        private static StyleIntegrityResult ScanAndCache(
-            Document doc, ViewSchedule schedule)
-        {
-            StyleIntegrityResult result =
-                ScheduleStyleIntegrityScanner.ScanWithRolledBackTransaction(doc, schedule);
-            ScheduleIntegritySessionCache.SetResult(doc, schedule.Id, result);
-            return result;
         }
 
         private static bool CanStartExplicitRepair(

@@ -6,7 +6,6 @@ using Autodesk.Revit.UI;
 using ExcelScheduleLink.Contracts;
 using ExcelScheduleLink.Excel.OpenXml;
 using ExcelScheduleLink.Revit2024.Link;
-using ExcelScheduleLink.Revit2024.Probing;
 using ExcelScheduleLink.Revit2024.UI;
 
 namespace ExcelScheduleLink.Revit2024.Commands
@@ -158,72 +157,81 @@ namespace ExcelScheduleLink.Revit2024.Commands
             ViewSchedule schedule = null;
             HeaderTableRenderer.RenderResult renderResult;
             string baseName = Path.GetFileNameWithoutExtension(xlsxPath) + " - " + sheetName;
-            using (Transaction transaction = new Transaction(doc, "Link Excel Worksheet"))
-            {
-                TransactionStatus started;
-                try
-                {
-                    started = transaction.Start();
-                }
-                catch (Exception ex)
-                {
-                    TaskDialog.Show(UserMessages.DialogTitle,
-                        UserMessages.LinkTransactionNotStarted(ex.Message));
-                    message = ex.Message;
-                    return Result.Failed;
-                }
-                if (started != TransactionStatus.Started)
-                {
-                    TaskDialog.Show(UserMessages.DialogTitle,
-                        UserMessages.LinkTransactionNotStarted(started.ToString()));
-                    message = started.ToString();
-                    return Result.Failed;
-                }
-                try
-                {
-                    schedule = ScheduleFactory.Create(doc, baseName);
-                    renderResult = HeaderTableRenderer.Render(schedule, sheet, info.WidthScale);
-                    info.RendererVersion = ExcelLinkInfo.CurrentRendererVersion;
-                    ExcelLinkSchema.SaveV2(schedule, info);
-                    if (transaction.Commit() != TransactionStatus.Committed)
+            ModelMutationResult<HeaderTableRenderer.RenderResult> mutation =
+                ModelMutation.Run<HeaderTableRenderer.RenderResult>(
+                    doc,
+                    "Link Excel Worksheet",
+                    delegate (ModelMutationContext context)
                     {
-                        throw new InvalidOperationException(
-                            "The link transaction did not commit.");
-                    }
-                }
-                catch (Autodesk.Revit.Exceptions.RegenerationFailedException)
-                {
-                    TransactionRollback.RollBackIfStarted(transaction);
-                    message = UserMessages.RegenerationFailure;
-                    TaskDialog.Show(UserMessages.DialogTitle, message);
-                    return Result.Failed;
-                }
-                catch (RegenerationFailureProbeException)
-                {
-                    TransactionRollback.RollBackIfStarted(transaction);
-                    message = UserMessages.RegenerationFailure;
-                    TaskDialog.Show(UserMessages.DialogTitle, message);
-                    return Result.Failed;
-                }
-                catch (UnsafeScheduleStyleException)
-                {
-                    bool rollbackVerified = TransactionRollback.RollBackIfStarted(transaction)
-                        == TransactionStatus.RolledBack;
-                    TaskDialog.Show(UserMessages.DialogTitle,
-                        UserMessages.LinkUnsafeStyleValidationFailed(rollbackVerified));
-                    message = UserMessages.LinkUnsafeStyleValidationFailed(rollbackVerified);
-                    return Result.Failed;
-                }
-                catch (Exception ex)
-                {
-                    bool rollbackVerified = TransactionRollback.RollBackIfStarted(transaction)
-                        == TransactionStatus.RolledBack;
-                    TaskDialog.Show(UserMessages.DialogTitle,
-                        UserMessages.LinkFailedRolledBack(ex.ToString(), rollbackVerified));
-                    message = ex.Message;
-                    return Result.Failed;
-                }
+                        schedule = ScheduleFactory.Create(doc, baseName);
+                        HeaderTableRenderer.RenderResult render =
+                            HeaderTableRenderer.Render(schedule, sheet, info.WidthScale);
+                        info.RendererVersion = ExcelLinkInfo.CurrentRendererVersion;
+                        ExcelLinkSchema.SaveV2(schedule, info);
+                        return render;
+                    });
+
+            if (mutation.Status == ModelMutationStatus.NotStarted)
+            {
+                string status = mutation.StartStatus.HasValue
+                    ? mutation.StartStatus.Value.ToString() : string.Empty;
+                TaskDialog.Show(UserMessages.DialogTitle,
+                    UserMessages.LinkTransactionNotStarted(status));
+                message = status;
+                return Result.Failed;
             }
+            if (mutation.Status == ModelMutationStatus.StartThrew)
+            {
+                string detail = mutation.Exception == null
+                    ? string.Empty : mutation.Exception.Message;
+                TaskDialog.Show(UserMessages.DialogTitle,
+                    UserMessages.LinkTransactionNotStarted(detail));
+                message = detail;
+                return Result.Failed;
+            }
+            if (mutation.Status == ModelMutationStatus.FatalRegeneration)
+            {
+                message = UserMessages.RegenerationFailure;
+                TaskDialog.Show(UserMessages.DialogTitle, message);
+                return Result.Failed;
+            }
+            if (mutation.Status == ModelMutationStatus.CommitNotCommitted)
+            {
+                string detail = new InvalidOperationException(
+                    UserMessages.LinkTransactionDidNotCommit).ToString();
+                TaskDialog.Show(UserMessages.DialogTitle,
+                    UserMessages.LinkFailedRolledBack(detail, mutation.RollbackVerified));
+                message = UserMessages.LinkTransactionDidNotCommit;
+                return Result.Failed;
+            }
+            if (mutation.Status == ModelMutationStatus.Aborted)
+            {
+                string detail = mutation.AbortReason;
+                TaskDialog.Show(UserMessages.DialogTitle,
+                    UserMessages.LinkFailedRolledBack(detail, mutation.RollbackVerified));
+                message = detail;
+                return Result.Failed;
+            }
+            if (mutation.Status == ModelMutationStatus.Failed)
+            {
+                if (mutation.Exception is UnsafeScheduleStyleException)
+                {
+                    string detail = UserMessages.LinkUnsafeStyleValidationFailed(
+                        mutation.RollbackVerified);
+                    TaskDialog.Show(UserMessages.DialogTitle, detail);
+                    message = detail;
+                    return Result.Failed;
+                }
+
+                Exception exception = mutation.Exception ?? new InvalidOperationException();
+                TaskDialog.Show(UserMessages.DialogTitle,
+                    UserMessages.LinkFailedRolledBack(
+                        exception.ToString(), mutation.RollbackVerified));
+                message = exception.Message;
+                return Result.Failed;
+            }
+
+            renderResult = mutation.Value;
 
             // Open the new schedule view (best effort)
             try

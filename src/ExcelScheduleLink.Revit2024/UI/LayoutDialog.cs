@@ -544,6 +544,7 @@ namespace ExcelScheduleLink.Revit2024.UI
 
         private void OnFitContent(object sender, EventArgs e)
         {
+            if (_fatalRegenerationFailure) return;
             if (_fitContent == null) return;
             FitContentResult result = _fitContent();
             if (result == null || result.Feet == null) return;
@@ -573,6 +574,7 @@ namespace ExcelScheduleLink.Revit2024.UI
 
         private void OnRestoreExcel(object sender, EventArgs e)
         {
+            if (_fatalRegenerationFailure) return;
             if (_restoreExcel == null) return;
             ExcelWidthResult result = _restoreExcel();
             if (result == null || !result.Success)
@@ -639,6 +641,7 @@ namespace ExcelScheduleLink.Revit2024.UI
         /// </summary>
         private void OnApplyNow(object sender, EventArgs e)
         {
+            if (_fatalRegenerationFailure) return;
             if (_applyNow == null) return;
             if (!ValidateBeforeApply()) return;
 
@@ -679,12 +682,22 @@ namespace ExcelScheduleLink.Revit2024.UI
 
         private void OnApplyAndClose(object sender, EventArgs e)
         {
+            if (_fatalRegenerationFailure)
+            {
+                Finish(LayoutDialogAction.Cancelled);
+                return;
+            }
             if (!ValidateBeforeApply()) return;
             Finish(LayoutDialogAction.ApplyAndClose);
         }
 
         private void OnOpenScheduleView(object sender, EventArgs e)
         {
+            if (_fatalRegenerationFailure)
+            {
+                Finish(LayoutDialogAction.Cancelled);
+                return;
+            }
             if (!_dirty)
             {
                 Finish(LayoutDialogAction.DiscardAndOpenSchedule);
@@ -703,6 +716,11 @@ namespace ExcelScheduleLink.Revit2024.UI
 
         private void OnCloseClicked(object sender, EventArgs e)
         {
+            if (_fatalRegenerationFailure)
+            {
+                Finish(LayoutDialogAction.Cancelled);
+                return;
+            }
             if (!_dirty)
             {
                 Finish(LayoutDialogAction.Cancelled);

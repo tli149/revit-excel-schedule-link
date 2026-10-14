@@ -8,17 +8,135 @@ namespace ExcelScheduleLink.Revit2024.Link
     /// <summary>Session-only state for one open Revit document.</summary>
     internal sealed class ScheduleIntegrityDocumentState
     {
-        public Document Document;
-        public readonly Dictionary<long, StyleIntegrityResult> Results =
+        private const long DocumentLevelKey =
+            StyleIntegrityDecisionTable.DefaultInvalidElementId;
+        private readonly Dictionary<long, StyleIntegrityResult> _results =
             new Dictionary<long, StyleIntegrityResult>();
-        public readonly OncePerDocumentNotificationBookkeeping Notifications =
-            new OncePerDocumentNotificationBookkeeping();
-        public bool AutomaticNotificationPending;
-        public int AutomaticNotificationAttempts;
-        public bool AutomaticNotificationInProgress;
-        public bool RetryPending;
-        public bool RetryAttempted;
-        public bool ReadOnlyAtOpen;
+        private readonly AutomaticIntegrityNotificationState _notificationState =
+            new AutomaticIntegrityNotificationState();
+
+        public ScheduleIntegrityDocumentState(Document document)
+        {
+            Document = document;
+        }
+
+        public Document Document { get; private set; }
+
+        public bool HasPendingWork
+        {
+            get { return _notificationState.HasPendingWork; }
+        }
+
+        public bool NotificationPending
+        {
+            get { return _notificationState.NotificationPending; }
+        }
+
+        public bool NotificationInProgress
+        {
+            get { return _notificationState.NotificationInProgress; }
+        }
+
+        public bool ReadOnlyAtOpen
+        {
+            get { return _notificationState.ReadOnlyAtOpen; }
+        }
+
+        public void RefreshDocument(Document document)
+        {
+            Document = document;
+        }
+
+        public void ScheduleRetry()
+        {
+            _notificationState.ScheduleRetry();
+        }
+
+        public bool TryBeginRetry()
+        {
+            return _notificationState.TryBeginRetry();
+        }
+
+        public void CompleteRetry()
+        {
+            _notificationState.CompleteRetry();
+        }
+
+        public void FailRetry()
+        {
+            _notificationState.FailRetry();
+        }
+
+        public void QueueNotification(bool needsNotification)
+        {
+            _notificationState.Queue(needsNotification);
+        }
+
+        public bool TryBeginNotification()
+        {
+            return _notificationState.TryBeginNotification();
+        }
+
+        public void CompleteNotificationShown()
+        {
+            _notificationState.CompleteNotificationShown();
+        }
+
+        public void NotificationAttemptFailed()
+        {
+            _notificationState.NotificationAttemptFailed();
+        }
+
+        public void EndNotificationAttempt()
+        {
+            _notificationState.EndNotificationAttempt();
+        }
+
+        public void MarkReadOnlyAtOpen()
+        {
+            _notificationState.MarkReadOnlyAtOpen();
+        }
+
+        public IDictionary<long, StyleIntegrityResult> GetResultsSnapshot()
+        {
+            return new Dictionary<long, StyleIntegrityResult>(_results);
+        }
+
+        public StyleIntegrityResult GetResult(long key)
+        {
+            StyleIntegrityResult result;
+            return _results.TryGetValue(key, out result) ? result : null;
+        }
+
+        public void SetResult(long key, StyleIntegrityResult result)
+        {
+            if (result != null)
+            {
+                _results[key] = result;
+            }
+        }
+
+        public void ClearResults()
+        {
+            _results.Clear();
+        }
+
+        public void RecordDocumentLevelFailure(Exception exception)
+        {
+            _results[DocumentLevelKey] = new StyleIntegrityResult
+            {
+                State = StyleIntegrityState.Indeterminate,
+                ReasonCode = StyleIntegrityReasonCode.TableReadFailed,
+                FirstReadError = exception == null
+                    ? string.Empty
+                    : exception.GetType().Name + ": " + exception.Message
+            };
+        }
+
+        public ScheduleIntegrityResultSummary GetResultSummary()
+        {
+            return ScheduleIntegrityResultSummary.From(GetResultsSnapshot());
+        }
     }
 
     /// <summary>
@@ -44,7 +162,7 @@ namespace ExcelScheduleLink.Revit2024.Link
             }
 
             ScheduleIntegrityDocumentState state =
-                new ScheduleIntegrityDocumentState { Document = doc };
+                new ScheduleIntegrityDocumentState(doc);
             int existing = FindIndex(doc);
             if (existing >= 0)
             {
@@ -69,7 +187,7 @@ namespace ExcelScheduleLink.Revit2024.Link
             {
                 // Keep the newest wrapper so later API access uses a live
                 // wrapper, while preserving the coalesced state object.
-                States[index].Document = doc;
+                States[index].RefreshDocument(doc);
                 return States[index];
             }
             return BeginAutomatic(doc);
@@ -88,7 +206,7 @@ namespace ExcelScheduleLink.Revit2024.Link
         {
             foreach (ScheduleIntegrityDocumentState state in States)
             {
-                if (state != null && (state.RetryPending || state.AutomaticNotificationPending))
+                if (state != null && state.HasPendingWork)
                 {
                     return true;
                 }
@@ -131,7 +249,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                 new List<ScheduleIntegrityDocumentState>();
             foreach (ScheduleIntegrityDocumentState state in States)
             {
-                if (state != null && (state.RetryPending || state.AutomaticNotificationPending))
+                if (state != null && state.HasPendingWork)
                 {
                     pending.Add(state);
                 }
@@ -144,7 +262,7 @@ namespace ExcelScheduleLink.Revit2024.Link
             ScheduleIntegrityDocumentState state = GetOrCreate(doc);
             return state == null
                 ? new Dictionary<long, StyleIntegrityResult>()
-                : new Dictionary<long, StyleIntegrityResult>(state.Results);
+                : state.GetResultsSnapshot();
         }
 
         public static StyleIntegrityResult GetResult(Document doc, ElementId scheduleId)
@@ -154,19 +272,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                 return null;
             }
             ScheduleIntegrityDocumentState state = GetOrCreate(doc);
-            StyleIntegrityResult result;
-            return state != null && state.Results.TryGetValue(scheduleId.Value, out result)
-                ? result : null;
-        }
-
-        public static void SetResult(
-            Document doc, ElementId scheduleId, StyleIntegrityResult result)
-        {
-            if (doc == null || scheduleId == null || result == null)
-            {
-                return;
-            }
-            GetOrCreate(doc).Results[scheduleId.Value] = result;
+            return state == null ? null : state.GetResult(scheduleId.Value);
         }
 
         public static IDictionary<long, StyleIntegrityResult> ScanManual(Document doc)
@@ -177,6 +283,20 @@ namespace ExcelScheduleLink.Revit2024.Link
         public static IDictionary<long, StyleIntegrityResult> ScanAutomatic(Document doc)
         {
             return Scan(doc, StyleIntegrityScanScope.Automatic);
+        }
+
+        public static StyleIntegrityResult Rescan(
+            Document doc, ViewSchedule schedule)
+        {
+            StyleIntegrityResult result =
+                ScheduleStyleIntegrityScanner.ScanWithRolledBackTransaction(
+                    doc, schedule);
+            ScheduleIntegrityDocumentState state = GetOrCreate(doc);
+            if (state != null && schedule != null && schedule.Id != null)
+            {
+                state.SetResult(schedule.Id.Value, result);
+            }
+            return result;
         }
 
         /// <summary>
@@ -252,7 +372,7 @@ namespace ExcelScheduleLink.Revit2024.Link
             IList<ViewSchedule> schedules = LinkedScheduleFinder.FindAll(doc);
             if (doc.IsReadOnly)
             {
-                state.ReadOnlyAtOpen = true;
+                state.MarkReadOnlyAtOpen();
                 SetUnavailable(state, schedules,
                     StyleIntegrityReasonCode.DocumentReadOnly,
                     "The document is read-only.");
@@ -297,12 +417,12 @@ namespace ExcelScheduleLink.Revit2024.Link
                         StyleIntegrityDecisionTable.LimitResult(schedules.Count - index);
                     for (int skipped = index; skipped < schedules.Count; skipped++)
                     {
-                        state.Results[schedules[skipped].Id.Value] =
-                            CloneLimitResult(limit);
+                        state.SetResult(
+                            schedules[skipped].Id.Value, CloneLimitResult(limit));
                     }
                     return;
                 }
-                state.Results[schedules[index].Id.Value] = result;
+                state.SetResult(schedules[index].Id.Value, result);
             }
         }
 
@@ -322,12 +442,12 @@ namespace ExcelScheduleLink.Revit2024.Link
         {
             foreach (ViewSchedule schedule in schedules)
             {
-                state.Results[schedule.Id.Value] = new StyleIntegrityResult
+                state.SetResult(schedule.Id.Value, new StyleIntegrityResult
                 {
                     State = StyleIntegrityState.Indeterminate,
                     ReasonCode = reason,
                     FirstReadError = detail ?? string.Empty
-                };
+                });
             }
         }
 

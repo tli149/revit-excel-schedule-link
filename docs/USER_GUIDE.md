@@ -1,6 +1,6 @@
 # Excel Schedule Link — User Guide
 
-> **Pilot release (0.9.3), Revit 2024 only.** Try it on a copy of a project
+> **Pilot release (0.9.4), Revit 2024 only.** Try it on a copy of a project
 > first, keep backups, and check the result before you save or sync. See
 > [Before you start](#before-you-start).
 
@@ -248,7 +248,8 @@ in Link Manager.
 - **Reload all** also reloads unsafe links under the same rules, never asks
   per-link questions, and reports **Repaired: n**.
 - **Rebuild from current table** is offered when one unsafe schedule's workbook
-  cannot be found or read. It rebuilds the schedule from the text and layout
+  cannot be found or read, or when you cancel the network-server approval for
+  it. It rebuilds the schedule from the text and layout
   already stored in Revit, without Excel. Cell-specific formatting is replaced
   by the schedule's Appearance settings. You confirm it every time, and
   Reload all never uses it.

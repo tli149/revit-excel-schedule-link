@@ -1,4 +1,4 @@
-Excel Schedule Link v0.9.3 - Third-Party Notices
+Excel Schedule Link v0.9.4 - Third-Party Notices
 ================================================
 
 This file covers third-party assemblies that are copied into the current

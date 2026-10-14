@@ -8,7 +8,7 @@ view and update it with one click when the workbook changes.
 
 ![Link Manager](docs/images/link-manager.png)
 
-> **Status: Pilot (0.9.3).** Works with **Autodesk Revit 2024 only**. Try it on
+> **Status: Pilot (0.9.4).** Works with **Autodesk Revit 2024 only**. Try it on
 > a copy of a project first, keep backups, and check results before you save or
 > sync. This is a personal project maintained in spare time; there is no
 > guaranteed support.
@@ -42,7 +42,7 @@ calculations in Excel and need them on Revit sheets.
 ## Install
 
 1. Go to **[Releases](../../releases)** and download
-   `ExcelScheduleLink_v0.9.3.zip` from **Assets**. The green **Code → Download ZIP**
+   `ExcelScheduleLink_v0.9.4.zip` from **Assets**. The green **Code → Download ZIP**
    button gives you the source code, not the add-in.
 2. Right-click the ZIP → **Properties** → tick **Unblock** → **OK**.
 3. Extract it and run `scripts\install-revit2024.ps1` (right-click → **Run

@@ -60,37 +60,47 @@ namespace ExcelScheduleLink.Excel.OpenXml.Tests
             Assert.Equal(3, model.ColumnCount);
         }
 
-        [Fact]
-        public void ReadSheet_DisplayTexts_MatchExpectedColumn()
+        [Theory]
+        [InlineData("en-US")]
+        [InlineData("ja-JP")]
+        public void ReadSheet_DisplayTexts_MatchExpectedColumn(string cultureName)
         {
-            SheetModel model = _service.ReadSheetSnapshot(FixturePath, "Step0", null).Sheet;
-
-            // 1-based rows 4..15 (0-based 3..14) are the test-case rows:
-            // A = case name, B = formatted value, C = expected display string
-            for (int r = 3; r <= 14; r++)
+            using (new TestCultureScope(cultureName))
             {
-                string caseName = model.GetText(r, 0);
-                string actual = model.GetText(r, 1);
-                string expected = model.GetText(r, 2);
-                Assert.False(string.IsNullOrEmpty(expected), "Expected-value cell is empty: row=" + r);
-                Assert.True(expected == actual,
-                    "Case \"" + caseName + "\" (0-based row " + r + "): expected \"" + expected
-                    + "\" actual \"" + actual + "\"");
+                SheetModel model = _service.ReadSheetSnapshot(FixturePath, "Step0", null).Sheet;
+
+                // 1-based rows 4..15 (0-based 3..14) are the test-case rows:
+                // A = case name, B = formatted value, C = expected display string
+                for (int r = 3; r <= 14; r++)
+                {
+                    string caseName = model.GetText(r, 0);
+                    string actual = model.GetText(r, 1);
+                    string expected = model.GetText(r, 2);
+                    Assert.False(string.IsNullOrEmpty(expected), "Expected-value cell is empty: row=" + r);
+                    Assert.True(expected == actual,
+                        "Case \"" + caseName + "\" (0-based row " + r + "): expected \"" + expected
+                        + "\" actual \"" + actual + "\"");
+                }
             }
         }
 
-        [Fact]
-        public void ReadSheet_KnownCases_Explicit()
+        [Theory]
+        [InlineData("en-US")]
+        [InlineData("ja-JP")]
+        public void ReadSheet_KnownCases_Explicit(string cultureName)
         {
-            SheetModel model = _service.ReadSheetSnapshot(FixturePath, "Step0", null).Sheet;
-            Assert.Equal("ESL Step0 テストブック(書式ケース)", model.GetText(0, 0));
-            Assert.Equal("1235", model.GetText(3, 1));        // integer "0"
-            Assert.Equal("2026/6/10", model.GetText(9, 1));   // date yyyy/m/d
-            Assert.Equal("13:45", model.GetText(10, 1));      // time h:mm
-            Assert.Equal("00123", model.GetText(11, 1));      // leading zeros
-            Assert.Equal("2,469.13", model.GetText(12, 1));   // formula cached value
-            Assert.Equal("TRUE", model.GetText(14, 1));       // boolean
-            Assert.Equal(string.Empty, model.GetText(15, 1)); // empty row
+            using (new TestCultureScope(cultureName))
+            {
+                SheetModel model = _service.ReadSheetSnapshot(FixturePath, "Step0", null).Sheet;
+                Assert.Equal("ESL Step0 テストブック(書式ケース)", model.GetText(0, 0));
+                Assert.Equal("1235", model.GetText(3, 1));        // integer "0"
+                Assert.Equal("2026/6/10", model.GetText(9, 1));   // date yyyy/m/d
+                Assert.Equal("13:45", model.GetText(10, 1));      // time h:mm
+                Assert.Equal("00123", model.GetText(11, 1));      // leading zeros
+                Assert.Equal("2,469.13", model.GetText(12, 1));   // formula cached value
+                Assert.Equal("TRUE", model.GetText(14, 1));       // boolean
+                Assert.Equal(string.Empty, model.GetText(15, 1)); // empty row
+            }
         }
 
         [Fact]
@@ -201,38 +211,39 @@ namespace ExcelScheduleLink.Excel.OpenXml.Tests
         }
 
         [Fact]
-        public void BuiltinDateFormatsFixture_UsesCultureForBuiltInsAndInvariantCustomControl()
+        public void BuiltinDateFormatsFixture_UsesCultureOnlyForLocalizedBuiltInsAndInvariantCustomControl()
         {
-            CultureInfo original = CultureInfo.CurrentCulture;
             DateTime value = new DateTime(2026, 6, 10, 13, 45, 0);
-            try
+            SheetModel enModel;
+            using (new TestCultureScope("en-US"))
             {
                 CultureInfo en = CultureInfo.GetCultureInfo("en-US");
-                CultureInfo ja = CultureInfo.GetCultureInfo("ja-JP");
-                CultureInfo.CurrentCulture = en;
-                SheetModel enModel = _service.ReadSheetSnapshot(
+                enModel = _service.ReadSheetSnapshot(
                     BuiltinFormatsFixturePath, "BuiltinFormats", null).Sheet;
-                CultureInfo.CurrentCulture = ja;
-                SheetModel jaModel = _service.ReadSheetSnapshot(
-                    BuiltinFormatsFixturePath, "BuiltinFormats", null).Sheet;
-
-                Assert.Equal(value.ToString(en.DateTimeFormat.ShortDatePattern, en), enModel.GetText(1, 1));
-                Assert.Equal(value.ToString(en.DateTimeFormat.ShortTimePattern, en), enModel.GetText(2, 1));
+                Assert.Equal(value.ToString(en.DateTimeFormat.ShortDatePattern, en),
+                    enModel.GetText(1, 1));
+                Assert.Equal("13:45", enModel.GetText(2, 1));
                 Assert.Equal(value.ToString(
                     en.DateTimeFormat.ShortDatePattern + " " + en.DateTimeFormat.ShortTimePattern, en),
                     enModel.GetText(3, 1));
+            }
+
+            SheetModel jaModel;
+            using (new TestCultureScope("ja-JP"))
+            {
+                CultureInfo ja = CultureInfo.GetCultureInfo("ja-JP");
+                jaModel = _service.ReadSheetSnapshot(
+                    BuiltinFormatsFixturePath, "BuiltinFormats", null).Sheet;
+
                 Assert.Equal(value.ToString(ja.DateTimeFormat.ShortDatePattern, ja), jaModel.GetText(1, 1));
-                Assert.Equal(value.ToString(ja.DateTimeFormat.ShortTimePattern, ja), jaModel.GetText(2, 1));
+                Assert.Equal("13:45", jaModel.GetText(2, 1));
                 Assert.Equal(value.ToString(
                     ja.DateTimeFormat.ShortDatePattern + " " + ja.DateTimeFormat.ShortTimePattern, ja),
                     jaModel.GetText(3, 1));
-                Assert.Equal("2026/6/10", enModel.GetText(4, 1));
                 Assert.Equal("2026/6/10", jaModel.GetText(4, 1));
             }
-            finally
-            {
-                CultureInfo.CurrentCulture = original;
-            }
+
+            Assert.Equal("2026/6/10", enModel.GetText(4, 1));
         }
 
         [Fact]

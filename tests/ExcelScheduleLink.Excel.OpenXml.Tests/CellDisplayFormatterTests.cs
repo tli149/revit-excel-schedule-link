@@ -80,46 +80,54 @@ namespace ExcelScheduleLink.Excel.OpenXml.Tests
         }
 
         [Fact]
-        public void BuiltinDateTimeIds_UseCurrentCulture()
+        public void BuiltinDateTimeIds_UseCultureOnlyForLocalizedBuiltIns()
         {
-            CultureInfo original = CultureInfo.CurrentCulture;
             DateTime value = new DateTime(2026, 6, 10, 13, 45, 7);
-            try
+            foreach (string cultureName in new[] { "en-US", "ja-JP" })
             {
-                foreach (string cultureName in new[] { "en-US", "ja-JP" })
+                CultureInfo culture = CultureInfo.GetCultureInfo(cultureName);
+                using (new TestCultureScope(culture))
                 {
-                    CultureInfo culture = CultureInfo.GetCultureInfo(cultureName);
-                    CultureInfo.CurrentCulture = culture;
                     double serial = value.ToOADate();
 
                     foreach (int id in new[] { 14, 15, 16, 17, 18, 19, 20, 21, 22, 45, 47 })
                     {
-                        string pattern = BuiltinNetPattern(id, culture);
-                        Assert.NotNull(pattern);
-                        Assert.Equal(value.ToString(pattern, culture), FmtBuiltin(serial, id));
+                        string expected;
+                        if (id == 14)
+                        {
+                            expected = value.ToString(
+                                culture.DateTimeFormat.ShortDatePattern, culture);
+                        }
+                        else if (id == 22)
+                        {
+                            expected = value.ToString(
+                                culture.DateTimeFormat.ShortDatePattern + " "
+                                    + culture.DateTimeFormat.ShortTimePattern,
+                                culture);
+                        }
+                        else
+                        {
+                            string pattern = BuiltinNetPattern(id);
+                            Assert.NotNull(pattern);
+                            expected = value.ToString(pattern, CultureInfo.InvariantCulture);
+                        }
+                        Assert.Equal(expected, FmtBuiltin(serial, id));
                     }
                 }
             }
-            finally
-            {
-                CultureInfo.CurrentCulture = original;
-            }
         }
 
-        private static string BuiltinNetPattern(int id, CultureInfo culture)
+        private static string BuiltinNetPattern(int id)
         {
             switch (id)
             {
-                case 14: return culture.DateTimeFormat.ShortDatePattern;
                 case 15: return "d-MMM-yy";
                 case 16: return "d-MMM";
                 case 17: return "MMM-yy";
                 case 18: return "h:mm tt";
                 case 19: return "h:mm:ss tt";
-                case 20: return culture.DateTimeFormat.ShortTimePattern;
+                case 20: return "H:mm";
                 case 21: return "H:mm:ss";
-                case 22: return culture.DateTimeFormat.ShortDatePattern + " "
-                    + culture.DateTimeFormat.ShortTimePattern;
                 case 45:
                 case 47: return "mm:ss";
                 default: return null;
@@ -127,31 +135,35 @@ namespace ExcelScheduleLink.Excel.OpenXml.Tests
         }
 
         [Fact]
-        public void BuiltinDateTimeIds_ChangeShortDateAndTimeWithCulture()
+        public void BuiltinDateTimeIds_OnlyLocalizedIdsChangeWithCulture()
         {
-            CultureInfo original = CultureInfo.CurrentCulture;
             DateTime value = new DateTime(2026, 6, 10, 13, 45, 0);
-            try
+            string enDate;
+            string enDateTime;
+            string enTime;
+            string enAmPm;
+            using (new TestCultureScope("en-US"))
             {
-                CultureInfo en = CultureInfo.GetCultureInfo("en-US");
-                CultureInfo ja = CultureInfo.GetCultureInfo("ja-JP");
-                CultureInfo.CurrentCulture = en;
-                string enDate = FmtBuiltin(value.ToOADate(), 14);
-                string enTime = FmtBuiltin(value.ToOADate(), 20);
-                CultureInfo.CurrentCulture = ja;
+                enDate = FmtBuiltin(value.ToOADate(), 14);
+                enDateTime = FmtBuiltin(value.ToOADate(), 22);
+                enTime = FmtBuiltin(value.ToOADate(), 20);
+                enAmPm = FmtBuiltin(value.ToOADate(), 18);
+            }
+            using (new TestCultureScope("ja-JP"))
+            {
                 string jaDate = FmtBuiltin(value.ToOADate(), 14);
+                string jaDateTime = FmtBuiltin(value.ToOADate(), 22);
                 string jaTime = FmtBuiltin(value.ToOADate(), 20);
+                string jaAmPm = FmtBuiltin(value.ToOADate(), 18);
 
-                Assert.Equal(value.ToString(en.DateTimeFormat.ShortDatePattern, en), enDate);
-                Assert.Equal(value.ToString(en.DateTimeFormat.ShortTimePattern, en), enTime);
-                Assert.Equal(value.ToString(ja.DateTimeFormat.ShortDatePattern, ja), jaDate);
-                Assert.Equal(value.ToString(ja.DateTimeFormat.ShortTimePattern, ja), jaTime);
                 Assert.NotEqual(enDate, jaDate);
+                Assert.NotEqual(enDateTime, jaDateTime);
+                Assert.Equal(enTime, jaTime);
+                Assert.Equal(enAmPm, jaAmPm);
             }
-            finally
-            {
-                CultureInfo.CurrentCulture = original;
-            }
+
+            Assert.Equal("13:45", enTime);
+            Assert.Equal("1:45 PM", enAmPm);
         }
 
         [Fact]
@@ -324,6 +336,7 @@ namespace ExcelScheduleLink.Excel.OpenXml.Tests
         [InlineData(4, "#,##0.00")]
         [InlineData(9, "0%")]
         [InlineData(15, "d-mmm-yy")]
+        [InlineData(20, "h:mm")]
         [InlineData(49, "@")]
         public void BuiltinFormatCodes_Resolved(int id, string expected)
         {

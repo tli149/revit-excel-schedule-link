@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using ExcelScheduleLink.Contracts;
 using Xunit;
 
@@ -72,7 +73,7 @@ namespace ExcelScheduleLink.Excel.OpenXml.Tests
         }
 
         [Fact]
-        public void AT96_NotificationBookkeeping_IsOncePerDocumentAndClearable()
+        public void AT96_AutomaticNotificationNeed_IsTrueForUnsafeOrUnverifiedResults()
         {
             Assert.False(ScheduleIntegrityFlowDecisions.NeedsAutomaticNotification(
                 new[] { Result(StyleIntegrityState.Healthy) }));
@@ -80,18 +81,6 @@ namespace ExcelScheduleLink.Excel.OpenXml.Tests
                 new[] { Result(StyleIntegrityState.Affected) }));
             Assert.True(ScheduleIntegrityFlowDecisions.NeedsAutomaticNotification(
                 new[] { Result(StyleIntegrityState.Indeterminate) }));
-
-            OncePerDocumentNotificationBookkeeping book =
-                new OncePerDocumentNotificationBookkeeping();
-
-            Assert.True(book.TryMarkShown("document-a"));
-            Assert.False(book.TryMarkShown("document-a"));
-            Assert.True(book.HasBeenShown("document-a"));
-            Assert.True(book.TryMarkShown("document-b"));
-
-            book.Clear("document-a");
-            Assert.False(book.HasBeenShown("document-a"));
-            Assert.True(book.TryMarkShown("document-a"));
         }
 
         [Fact]
@@ -110,31 +99,150 @@ namespace ExcelScheduleLink.Excel.OpenXml.Tests
         }
 
         [Fact]
-        public void AT89_AutomaticNotification_RetriesWithoutConsumingShownToken()
+        public void AT89_AutomaticNotificationState_RetriesThreeFailuresThenStops()
         {
-            Assert.True(ScheduleIntegrityFlowDecisions.CanAttemptAutomaticNotification(
-                true, false, 0));
-            Assert.True(ScheduleIntegrityFlowDecisions.CanAttemptAutomaticNotification(
-                true, false, 2));
-            Assert.False(ScheduleIntegrityFlowDecisions.CanAttemptAutomaticNotification(
-                true, false, 3));
-            Assert.False(ScheduleIntegrityFlowDecisions.CanAttemptAutomaticNotification(
-                true, true, 0));
-            Assert.False(ScheduleIntegrityFlowDecisions.CanAttemptAutomaticNotification(
-                false, false, 0));
+            AutomaticIntegrityNotificationState state =
+                new AutomaticIntegrityNotificationState();
 
-            OncePerDocumentNotificationBookkeeping book =
-                new OncePerDocumentNotificationBookkeeping();
-            // A failed construction/show does not call TryMarkShown, so a
-            // later Idling attempt remains eligible.
-            Assert.False(book.HasBeenShown("document-a"));
-            Assert.True(ScheduleIntegrityFlowDecisions.CanAttemptAutomaticNotification(
-                true, book.HasBeenShown("document-a"), 1));
+            state.Queue(true);
+            Assert.True(state.TryBeginNotification());
+            Assert.Equal(1, state.NotificationAttempts);
+            Assert.True(state.NotificationInProgress);
+            state.EndNotificationAttempt();
+            state.NotificationAttemptFailed();
+            Assert.True(state.NotificationPending);
+            Assert.Equal(1, state.NotificationAttempts);
 
-            // Only the successful-show path consumes the once-per-document key.
-            Assert.True(book.TryMarkShown("document-a"));
-            Assert.False(ScheduleIntegrityFlowDecisions.CanAttemptAutomaticNotification(
-                true, book.HasBeenShown("document-a"), 0));
+            Assert.True(state.TryBeginNotification());
+            state.EndNotificationAttempt();
+            state.NotificationAttemptFailed();
+            Assert.True(state.NotificationPending);
+            Assert.Equal(2, state.NotificationAttempts);
+
+            Assert.True(state.TryBeginNotification());
+            state.EndNotificationAttempt();
+            state.NotificationAttemptFailed();
+            Assert.False(state.NotificationPending);
+            Assert.False(state.HasPendingWork);
+            Assert.Equal(3, state.NotificationAttempts);
+            Assert.False(state.TryBeginNotification());
+        }
+
+        [Fact]
+        public void AT89_AutomaticNotificationState_SuccessConsumesTokenAndResetsAttempts()
+        {
+            AutomaticIntegrityNotificationState state =
+                new AutomaticIntegrityNotificationState();
+            state.Queue(true);
+            Assert.True(state.TryBeginNotification());
+            Assert.False(state.NotificationShown);
+            Assert.True(state.NotificationInProgress);
+
+            state.CompleteNotificationShown();
+
+            Assert.True(state.NotificationShown);
+            Assert.False(state.NotificationPending);
+            Assert.True(state.NotificationInProgress);
+            Assert.Equal(0, state.NotificationAttempts);
+
+            state.EndNotificationAttempt();
+            Assert.False(state.NotificationInProgress);
+
+            state.Queue(true);
+            Assert.False(state.TryBeginNotification());
+            Assert.False(state.NotificationPending);
+        }
+
+        [Fact]
+        public void AT89_AutomaticIntegrityNotificationState_SuccessfullyCompletesRetry()
+        {
+            AutomaticIntegrityNotificationState state =
+                new AutomaticIntegrityNotificationState();
+
+            state.ScheduleRetry();
+            Assert.True(state.TryBeginRetry());
+            Assert.True(state.RetryPending);
+            Assert.True(state.RetryAttempted);
+
+            state.CompleteRetry();
+
+            Assert.False(state.RetryPending);
+            Assert.True(state.RetryAttempted);
+            Assert.False(state.HasPendingWork);
+            Assert.False(state.TryBeginRetry());
+        }
+
+        [Fact]
+        public void AT89_AutomaticIntegrityNotificationState_RejectsNotificationReentry()
+        {
+            AutomaticIntegrityNotificationState state =
+                new AutomaticIntegrityNotificationState();
+
+            state.Queue(true);
+            Assert.True(state.TryBeginNotification());
+            Assert.True(state.NotificationInProgress);
+            Assert.False(state.TryBeginNotification());
+            Assert.Equal(1, state.NotificationAttempts);
+            Assert.True(state.NotificationPending);
+
+            state.EndNotificationAttempt();
+            state.NotificationAttemptFailed();
+        }
+
+        [Fact]
+        public void AT89_AutomaticNotificationState_RetryIsAttemptedOnceAndReadOnlyIsRemembered()
+        {
+            AutomaticIntegrityNotificationState state =
+                new AutomaticIntegrityNotificationState();
+
+            state.ScheduleRetry();
+            Assert.True(state.RetryPending);
+            Assert.True(state.TryBeginRetry());
+            Assert.True(state.RetryAttempted);
+            state.FailRetry();
+            Assert.False(state.RetryPending);
+            Assert.False(state.TryBeginRetry());
+
+            state.MarkReadOnlyAtOpen();
+            Assert.True(state.ReadOnlyAtOpen);
+        }
+
+        [Fact]
+        public void AT89_ResultSummary_CollectsAffectedIdsAndUnverifiedResults()
+        {
+            Dictionary<long, StyleIntegrityResult> results =
+                new Dictionary<long, StyleIntegrityResult>
+                {
+                    { 10L, Result(StyleIntegrityState.Healthy) },
+                    { 20L, Result(StyleIntegrityState.Affected) },
+                    { 30L, null },
+                    { 40L, Result(StyleIntegrityState.Indeterminate) }
+                };
+
+            ScheduleIntegrityResultSummary summary =
+                ScheduleIntegrityResultSummary.From(results);
+
+            Assert.Equal(new[] { 20L }, summary.AffectedScheduleIds);
+            Assert.True(summary.HasAffected);
+            Assert.True(summary.HasIndeterminate);
+        }
+
+        [Fact]
+        public void AT89_ResultSummary_PreservesAffectedIdEnumerationOrder()
+        {
+            Dictionary<long, StyleIntegrityResult> results =
+                new Dictionary<long, StyleIntegrityResult>
+                {
+                    { 30L, Result(StyleIntegrityState.Affected) },
+                    { 10L, Result(StyleIntegrityState.Healthy) },
+                    { 20L, Result(StyleIntegrityState.Affected) },
+                    { 40L, Result(StyleIntegrityState.Affected) }
+                };
+
+            ScheduleIntegrityResultSummary summary =
+                ScheduleIntegrityResultSummary.From(results);
+
+            Assert.Equal(new[] { 30L, 20L, 40L }, summary.AffectedScheduleIds);
         }
 
         [Fact]
@@ -167,23 +275,6 @@ namespace ExcelScheduleLink.Excel.OpenXml.Tests
                 ScheduleIntegrityFlowDecisions.ShouldOfferReviewRepairsNow(false, false));
             Assert.False(
                 ScheduleIntegrityFlowDecisions.ShouldOfferReviewRepairsNow(false, true));
-        }
-
-        [Fact]
-        public void AT89_NotificationBookkeeping_RejectsNullAndEmptyKeys()
-        {
-            OncePerDocumentNotificationBookkeeping book =
-                new OncePerDocumentNotificationBookkeeping();
-
-            Assert.False(book.TryMarkShown(null));
-            Assert.False(book.TryMarkShown(string.Empty));
-            Assert.False(book.HasBeenShown(null));
-            Assert.False(book.HasBeenShown(string.Empty));
-            book.Clear(null);
-            book.Clear(string.Empty);
-            Assert.True(book.TryMarkShown("document-a"));
-            book.Clear(null);
-            Assert.True(book.HasBeenShown("document-a"));
         }
 
         [Fact]
@@ -356,7 +447,7 @@ namespace ExcelScheduleLink.Excel.OpenXml.Tests
                 ScheduleIntegrityFlowDecisions.ForExplicitRepairDocument(
                     true, true, true, true, true));
             // Revit reports a detached document as opened from a read-only file
-            // (journal.0240); detached therefore wins over that flag.
+            // even when the central is writable; detached therefore wins over that flag.
             Assert.Equal(
                 ScheduleIntegrityFlowDecisions.ExplicitRepairDocumentDecision.RequireDetachedConfirmation,
                 ScheduleIntegrityFlowDecisions.ForExplicitRepairDocument(

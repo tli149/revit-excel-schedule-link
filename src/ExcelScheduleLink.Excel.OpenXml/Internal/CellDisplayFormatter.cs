@@ -12,9 +12,10 @@ namespace ExcelScheduleLink.Excel.OpenXml.Internal
     /// 0.0 "A", 0.00 "kVA"); and fraction formats (# ?/?, # ??/??).
     /// Unsupported formats (scientific, conditional sections, date formats that
     /// mix in quoted literals, ...) fall back to the invariant string of the
-    /// raw value. Explicit custom formats remain invariant; supported built-in
-    /// date/time ids use the current process culture, matching Excel's
-    /// locale-dependent built-in display behavior.
+    /// raw value. Explicit custom formats remain invariant. Only the built-in
+    /// short-date (14) and short-date-plus-time (22) formats use the current
+    /// process culture; the other supported built-in date/time ids use fixed
+    /// Excel patterns.
     /// </summary>
     internal static class CellDisplayFormatter
     {
@@ -343,28 +344,29 @@ namespace ExcelScheduleLink.Excel.OpenXml.Internal
                 || cell.NumFmtId == 45 || cell.NumFmtId == 47;
         }
 
+        private static bool IsCultureLocalizedBuiltin(int id)
+        {
+            return id == 14 || id == 22;
+        }
+
         private static string FormatBuiltinDateTime(DateTime value, int id)
         {
-            CultureInfo culture = CultureInfo.CurrentCulture;
-            string pattern;
-            if (id == 14)
+            if (IsCultureLocalizedBuiltin(id))
             {
-                pattern = culture.DateTimeFormat.ShortDatePattern;
+                CultureInfo culture = CultureInfo.CurrentCulture;
+                string localizedPattern = id == 14
+                    ? culture.DateTimeFormat.ShortDatePattern
+                    : culture.DateTimeFormat.ShortDatePattern + " "
+                        + culture.DateTimeFormat.ShortTimePattern;
+                return value.ToString(localizedPattern, culture);
             }
-            else if (id == 20)
-            {
-                pattern = culture.DateTimeFormat.ShortTimePattern;
-            }
-            else if (id == 22)
-            {
-                pattern = culture.DateTimeFormat.ShortDatePattern + " "
-                    + culture.DateTimeFormat.ShortTimePattern;
-            }
-            else
-            {
-                pattern = BuiltinNetDateTimeFormatCode(id);
-            }
-            return value.ToString(pattern, culture);
+
+            // Built-in 20 is Excel's 24-hour h:mm format, not the host's
+            // short-time pattern. All other supported built-in patterns are
+            // likewise evaluated invariantly so the host culture cannot alter
+            // an explicit Excel format.
+            return value.ToString(
+                BuiltinNetDateTimeFormatCode(id), CultureInfo.InvariantCulture);
         }
 
         /// <summary>numFmtId / custom format code → the format code to use. Null = General.</summary>
@@ -380,7 +382,10 @@ namespace ExcelScheduleLink.Excel.OpenXml.Internal
         /// <summary>Main subset of built-in numFmtIds (ECMA-376). Null = treat as General.</summary>
         internal static string BuiltinFormatCode(int id)
         {
-            return BuiltinFormatCode(id, CultureInfo.CurrentCulture);
+            CultureInfo culture = IsCultureLocalizedBuiltin(id)
+                ? CultureInfo.CurrentCulture
+                : CultureInfo.InvariantCulture;
+            return BuiltinFormatCode(id, culture);
         }
 
         internal static string BuiltinFormatCode(int id, CultureInfo culture)
@@ -397,7 +402,6 @@ namespace ExcelScheduleLink.Excel.OpenXml.Internal
                 case 12: return "# ?/?";
                 case 13: return "# ??/??";
                 case 14: return culture.DateTimeFormat.ShortDatePattern;
-                case 20: return culture.DateTimeFormat.ShortTimePattern;
                 case 22: return culture.DateTimeFormat.ShortDatePattern + " "
                     + culture.DateTimeFormat.ShortTimePattern;
                 case 15:
@@ -405,6 +409,7 @@ namespace ExcelScheduleLink.Excel.OpenXml.Internal
                 case 17:
                 case 18:
                 case 19:
+                case 20:
                 case 21: return BuiltinStructuralFormatCode(id);
                 case 37:
                 case 38: return "#,##0";
@@ -426,6 +431,7 @@ namespace ExcelScheduleLink.Excel.OpenXml.Internal
                 case 17: return "mmm-yy";
                 case 18: return "h:mm AM/PM";
                 case 19: return "h:mm:ss AM/PM";
+                case 20: return "h:mm";
                 case 21: return "h:mm:ss";
                 case 45:
                 case 47: return "mm:ss";
@@ -442,6 +448,7 @@ namespace ExcelScheduleLink.Excel.OpenXml.Internal
                 case 17: return "MMM-yy";
                 case 18: return "h:mm tt";
                 case 19: return "h:mm:ss tt";
+                case 20: return "H:mm";
                 case 21: return "H:mm:ss";
                 case 45:
                 case 47: return "mm:ss";

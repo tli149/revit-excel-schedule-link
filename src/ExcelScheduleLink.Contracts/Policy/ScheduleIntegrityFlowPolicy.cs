@@ -1,4 +1,4 @@
-using System;
+// Revit-free decision logic, kept in Contracts so the net8 tests can exercise it.
 using System.Collections.Generic;
 
 namespace ExcelScheduleLink.Contracts
@@ -73,15 +73,6 @@ namespace ExcelScheduleLink.Contracts
             return (workbookReloadSucceeded || fallbackSucceeded)
                 && after != null
                 && after.State == StyleIntegrityState.Healthy;
-        }
-
-        public static bool CanAttemptAutomaticNotification(
-            bool pending, bool alreadyShown, int failedAttempts)
-        {
-            return pending
-                && !alreadyShown
-                && failedAttempts >= 0
-                && failedAttempts < AutomaticNotificationMaxAttempts;
         }
 
         public static ScheduleActivationDecision ForActivation(
@@ -245,7 +236,7 @@ namespace ExcelScheduleLink.Contracts
             }
             // Detached is checked before the read-only-file flag: Revit reports a
             // document detached from its central as opened from a read-only file
-            // even when the central file is writable (journal.0240), and a
+            // even when the central file is writable, and a
             // detached copy is exactly the editable document the read-only-file
             // advice would ask the user to create.
             if (isDetached)
@@ -265,35 +256,196 @@ namespace ExcelScheduleLink.Contracts
     }
 
     /// <summary>
-    /// Session-only once-per-document bookkeeping. The caller supplies a
-    /// document identity and is responsible for clearing it when that document
-    /// closes; no document or model data is persisted here.
+    /// Pure summary of the results that drive the automatic integrity warning.
     /// </summary>
-    public sealed class OncePerDocumentNotificationBookkeeping
+    public sealed class ScheduleIntegrityResultSummary
     {
-        private readonly HashSet<string> _shown = new HashSet<string>(
-            StringComparer.Ordinal);
-
-        public bool TryMarkShown(string documentKey)
+        private ScheduleIntegrityResultSummary(
+            IReadOnlyList<long> affectedScheduleIds,
+            bool hasIndeterminate,
+            bool hasAffected)
         {
-            if (string.IsNullOrEmpty(documentKey))
+            AffectedScheduleIds = affectedScheduleIds;
+            HasIndeterminate = hasIndeterminate;
+            HasAffected = hasAffected;
+        }
+
+        public IReadOnlyList<long> AffectedScheduleIds { get; private set; }
+        public bool HasIndeterminate { get; private set; }
+        public bool HasAffected { get; private set; }
+
+        public static ScheduleIntegrityResultSummary From(
+            IDictionary<long, StyleIntegrityResult> results)
+        {
+            List<long> affectedScheduleIds = new List<long>();
+            bool hasIndeterminate = false;
+            bool hasAffected = false;
+            if (results != null)
+            {
+                foreach (KeyValuePair<long, StyleIntegrityResult> pair in results)
+                {
+                    StyleIntegrityResult result = pair.Value;
+                    if (result == null
+                        || result.State == StyleIntegrityState.Indeterminate)
+                    {
+                        hasIndeterminate = true;
+                    }
+                    else if (result.State == StyleIntegrityState.Affected)
+                    {
+                        hasAffected = true;
+                        affectedScheduleIds.Add(pair.Key);
+                    }
+                }
+            }
+
+            return new ScheduleIntegrityResultSummary(
+                affectedScheduleIds.AsReadOnly(), hasIndeterminate, hasAffected);
+        }
+    }
+
+    /// <summary>
+    /// Owns the retry and automatic-notification state for one document-open
+    /// session. It contains no Revit or UI dependencies.
+    /// </summary>
+    public sealed class AutomaticIntegrityNotificationState
+    {
+        private bool _notificationPending;
+        private int _notificationAttempts;
+        private bool _notificationInProgress;
+        private bool _notificationShown;
+        private bool _retryPending;
+        private bool _retryAttempted;
+        private bool _readOnlyAtOpen;
+
+        public bool HasPendingWork
+        {
+            get { return _retryPending || _notificationPending; }
+        }
+
+        public bool NotificationPending
+        {
+            get { return _notificationPending; }
+        }
+
+        public int NotificationAttempts
+        {
+            get { return _notificationAttempts; }
+        }
+
+        public bool NotificationInProgress
+        {
+            get { return _notificationInProgress; }
+        }
+
+        public bool NotificationShown
+        {
+            get { return _notificationShown; }
+        }
+
+        public bool RetryPending
+        {
+            get { return _retryPending; }
+        }
+
+        public bool RetryAttempted
+        {
+            get { return _retryAttempted; }
+        }
+
+        public bool ReadOnlyAtOpen
+        {
+            get { return _readOnlyAtOpen; }
+        }
+
+        public void ScheduleRetry()
+        {
+            _retryPending = true;
+        }
+
+        public bool TryBeginRetry()
+        {
+            if (!_retryPending || _retryAttempted)
             {
                 return false;
             }
-            return _shown.Add(documentKey);
+            _retryAttempted = true;
+            return true;
         }
 
-        public bool HasBeenShown(string documentKey)
+        public void CompleteRetry()
         {
-            return !string.IsNullOrEmpty(documentKey) && _shown.Contains(documentKey);
+            _retryPending = false;
         }
 
-        public void Clear(string documentKey)
+        public void FailRetry()
         {
-            if (!string.IsNullOrEmpty(documentKey))
+            _retryPending = false;
+        }
+
+        public void Queue(bool needsNotification)
+        {
+            _notificationPending = needsNotification;
+        }
+
+        public bool TryBeginNotification()
+        {
+            if (_notificationInProgress)
             {
-                _shown.Remove(documentKey);
+                return false;
             }
+            if (_notificationShown)
+            {
+                _notificationPending = false;
+                return false;
+            }
+            if (!_notificationPending)
+            {
+                return false;
+            }
+            if (!CanAttemptNotification())
+            {
+                _notificationPending = false;
+                return false;
+            }
+
+            _notificationAttempts++;
+            _notificationInProgress = true;
+            return true;
+        }
+
+        public void CompleteNotificationShown()
+        {
+            _notificationShown = true;
+            _notificationPending = false;
+            _notificationAttempts = 0;
+        }
+
+        public void NotificationAttemptFailed()
+        {
+            _notificationInProgress = false;
+            if (!CanAttemptNotification())
+            {
+                _notificationPending = false;
+            }
+        }
+
+        public void EndNotificationAttempt()
+        {
+            _notificationInProgress = false;
+        }
+
+        public void MarkReadOnlyAtOpen()
+        {
+            _readOnlyAtOpen = true;
+        }
+
+        private bool CanAttemptNotification()
+        {
+            return _notificationPending
+                && !_notificationShown
+                && _notificationAttempts >= 0
+                && _notificationAttempts
+                    < ScheduleIntegrityFlowDecisions.AutomaticNotificationMaxAttempts;
         }
     }
 

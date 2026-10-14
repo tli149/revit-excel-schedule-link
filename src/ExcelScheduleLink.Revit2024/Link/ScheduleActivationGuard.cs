@@ -21,8 +21,7 @@ namespace ExcelScheduleLink.Revit2024.Link
 
             Document doc = uidoc.Document;
             StyleIntegrityResult initial =
-                ScheduleStyleIntegrityScanner.ScanWithRolledBackTransaction(doc, schedule);
-            ScheduleIntegritySessionCache.SetResult(doc, schedule.Id, initial);
+                ScheduleIntegritySessionCache.Rescan(doc, schedule);
 
             switch (ScheduleIntegrityFlowDecisions.ForActivation(initial))
             {
@@ -58,76 +57,48 @@ namespace ExcelScheduleLink.Revit2024.Link
                 return false;
             }
 
-            ReloadOutcome reload = ReloadService.Reload(
-                uidoc.Document, schedule, ReloadScope.SingleLink, null, initial);
-            if (reload.IsFatalRegenerationFailure)
+            TargetedReloadFlowResult flow = TargetedReloadFlow.Run(
+                uidoc.Document, schedule, ReloadScope.SingleLink, null, initial,
+                false);
+            ReloadOutcome reload = flow.Reload;
+            if (flow.FatalRegeneration)
             {
-                TaskDialog.Show(UserMessages.DialogTitle, reload.Detail);
+                if (reload.IsFatalRegenerationFailure)
+                {
+                    TaskDialog.Show(UserMessages.DialogTitle, reload.Detail);
+                }
                 return false;
             }
             if (reload.IsSuccess)
             {
-                if (!ActivateOnlyAfterHealthyRescan(uidoc.Document, schedule))
+                if (!flow.FinalHealthy)
                 {
+                    TaskDialog.Show(UserMessages.DialogTitle,
+                        UserMessages.FallbackPostRepairFailed);
                     return false;
                 }
-                string summary = UserMessages.AppendRenderNotes(
-                    UserMessages.ReloadSucceeded(reload),
-                    reload.SourceRows, reload.SourceColumns,
-                    reload.Truncated, reload.ViewWidthProblem,
-                    reload.ColumnWidthsRejected);
-                TaskDialog.Show(UserMessages.DialogTitle, summary);
+                TaskDialog.Show(UserMessages.DialogTitle,
+                    UserMessages.ReloadOutcomeMessage(reload));
                 return true;
             }
 
-            if (ScheduleIntegrityFlowDecisions.ShouldOfferCurrentTableFallback(
-                initial == null ? (StyleIntegrityState?)null : initial.State,
-                reload.Kind != ReloadResultKind.SourceMissing
-                    && reload.Kind != ReloadResultKind.NetworkAccessCancelled
-                    && reload.Kind != ReloadResultKind.ReadFailed))
+            if (flow.Fallback != null && flow.Fallback.Success)
             {
-                RepairAttemptOutcome fallback =
-                    ScheduleRepairCoordinator.TryFallback(uidoc.Document, schedule);
-                if (fallback != null && fallback.FatalRegenerationFailure)
+                if (!flow.FinalHealthy)
                 {
-                    return false;
+                    TaskDialog.Show(UserMessages.DialogTitle,
+                        UserMessages.FallbackPostRepairFailed);
                 }
-                if (fallback != null && fallback.Success)
-                {
-                    return ActivateOnlyAfterHealthyRescan(uidoc.Document, schedule);
-                }
-                return false;
+                return flow.FinalHealthy;
             }
 
-            // Keep the session hint truthful after cancellation or any failed
-            // ordinary reload, even though activation remains blocked.
-            StyleIntegrityResult after =
-                ScheduleStyleIntegrityScanner.ScanWithRolledBackTransaction(
-                    uidoc.Document, schedule);
-            ScheduleIntegritySessionCache.SetResult(
-                uidoc.Document, schedule.Id, after);
-
-            if (reload.Kind != ReloadResultKind.Cancelled
+            if (!flow.FallbackOffered
+                && reload.Kind != ReloadResultKind.Cancelled
                 && !string.IsNullOrEmpty(reload.Detail))
             {
-                TaskDialog.Show(UserMessages.DialogTitle, reload.Detail);
+                TaskDialog.Show(UserMessages.DialogTitle,
+                    UserMessages.ReloadOutcomeMessage(reload));
             }
-            return false;
-        }
-
-        private static bool ActivateOnlyAfterHealthyRescan(
-            Document doc, ViewSchedule schedule)
-        {
-            StyleIntegrityResult after =
-                ScheduleStyleIntegrityScanner.ScanWithRolledBackTransaction(doc, schedule);
-            ScheduleIntegritySessionCache.SetResult(doc, schedule.Id, after);
-            if (after != null && after.State == StyleIntegrityState.Healthy)
-            {
-                return true;
-            }
-
-            TaskDialog.Show(UserMessages.DialogTitle,
-                UserMessages.FallbackPostRepairFailed);
             return false;
         }
     }
