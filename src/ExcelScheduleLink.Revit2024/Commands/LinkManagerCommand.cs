@@ -8,16 +8,22 @@ namespace ExcelScheduleLink.Revit2024.Commands
 {
     /// <summary>
     /// Step 4 production command: opens the Link Manager — a modal dialog that
-    /// lists all linked schedules, shows their source path and missing-source
-    /// status, edits per-link settings (column-width / row-height mode, width
-    /// scale) that persist for the next reload, and reloads the selected link
-    /// or all links. The dialog runs in this command's API context, so the
-    /// transactions it opens (settings save, reload) are valid.
+    /// lists all linked schedules with their source path, status and integrity,
+    /// reloads the selected link or all links, and checks and repairs unsafe
+    /// tables. Reload policies are edited in Column Widths, not here. The dialog
+    /// runs in this command's API context, so the transactions it opens (reload,
+    /// repair) are valid.
     /// </summary>
     [Transaction(TransactionMode.Manual)]
     public class LinkManagerCommand : IExternalCommand
     {
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+        {
+            return FatalRegenerationBoundary.RunCommand(ref message,
+                delegate { return Run(commandData); });
+        }
+
+        private static Result Run(ExternalCommandData commandData)
         {
             UIApplication uiapp = commandData.Application;
             UIDocument uidoc = uiapp.ActiveUIDocument;

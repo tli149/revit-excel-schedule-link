@@ -43,7 +43,7 @@
     <AddInId>004eba87-f971-41e4-b4b6-45fec3e1c533</AddInId>
     <FullClassName>ExcelScheduleLink.Revit2024.Commands.LinkManagerCommand</FullClassName>
     <Text>Excel Schedule Link: Link Manager...</Text>
-    <Description>Lists all Excel-linked schedules with their source path and status, lets you edit each link's column-width / row-height mode and width scale (applied on the next reload), and reload the selected link or all links.</Description>
+    <Description>Lists all Excel-linked schedules with their source path and status, reloads the selected link or all links, and checks and repairs unsafe tables. Use Column Widths to change widths and reload policies.</Description>
     <VisibilityMode>AlwaysVisible</VisibilityMode>
     <VendorId>ESL0</VendorId>
     <VendorDescription>Excel Schedule Link</VendorDescription>

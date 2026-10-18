@@ -2,7 +2,7 @@
 
 ## 1. Current baseline
 
-The v0.9.4 source baseline is a Revit 2024 add-in. The add-in targets .NET
+The v0.10.0 source baseline is a Revit 2024 add-in. The add-in targets .NET
 Framework 4.8; the reusable Contracts, Excel reader, and Layout libraries target
 .NET Standard 2.0; the unit-test project targets .NET 8. The add-in reads an
 `.xlsx` worksheet, renders the displayed cell text into a Revit `ViewSchedule`,
@@ -36,18 +36,25 @@ assemblies are not copied into the product output.
 The four principal flows are:
 
 - **Link:** `LinkExcelCommand` validates the selected path, obtains the sheet
-  selection, reads a `SheetModel` and `SourceFingerprint`, then uses
-  `ModelMutation` for schedule creation, header rendering, and v2 storage.
+  selection and optional range, reads a `SheetModel` and `SourceFingerprint`,
+  then uses `ModelMutation` for schedule creation, header rendering, row fitting
+  under the selected policy, and v2 storage. The dialog requests no width scale;
+  new links use the fixed 1.5 initial factor and start with current-width
+  preservation on later reloads.
 - **Reload:** `ReloadService` resolves and reads the workbook before its
   transaction. `TargetedReloadFlow` adds the consented current-table fallback
   and final integrity qualification. `ReloadAllFlow` processes links
   independently without offering that fallback; rows requiring source-identity
   or width-risk confirmation are skipped. UNC approval and the session
   worksharing advisory can still display dialogs.
-- **Layout:** `LayoutService` resolves a linked schedule, validates candidate
-  widths, and applies one width set plus any requested reload-policy change in a
-  single mutation. `QuickLayoutRunner` and `LayoutDialogCommand` provide the
-  command and dialog entry points.
+- **Layout:** `LayoutService` resolves a linked schedule, reads the current
+  widths, validates candidate widths, and applies one width set plus any
+  requested column/row reload-policy change in a single mutation.
+  `FitContentText` and `LayoutOps` allocate a fixed total for both dialog
+  candidates and live Quick Layout widths; `HeaderRowFitter` sets fitted header
+  rows during the mutation when the saved row policy requests it.
+  `QuickLayoutRunner` and `LayoutDialogCommand` provide the command and dialog
+  entry points.
 - **Repair:** `ScheduleRepairCoordinator` owns explicit consent and per-schedule
   review. `ScheduleRepairService` captures an existing table in a read
   transaction and uses the snapshot only after its final status is verified as
@@ -59,7 +66,10 @@ The four principal flows are:
 | Rule | Owning code |
 |---|---|
 | Transaction lifecycle, fatal regeneration, and v1-to-v2 link loading | `ModelMutation` and `ModelMutationContext` |
-| Targeted reload, fallback, rescan, and final-health sequence | `TargetedReloadFlow` |
+| Which exceptions are a fatal regeneration; every catch-all around a Revit read filters them out with it | `ModelMutation.IsFatalRegeneration` |
+| What a command, dialog callback or Idling repair does when a fatal regeneration reaches it as an exception, including that production command bodies never set Revit's `message` and `RunCommand` sets it only when the ESL fatal dialog could not be shown and the result is Failed; the lifecycle defers its one fatal message to the next Idling through `ContainInEventHandler` and `ShowDeferredMessage` | `FatalRegenerationBoundary` |
+| Dropping all retained automatic integrity state after any fatal regeneration, without reading a document | `ScheduleIntegritySessionCache`, via `ModelMutation.FatalRegenerationCount` |
+| Targeted reload, fallback, rescan, and final-health sequence, and that a caller shows no workbook reload outcome once the flow dispatched to the fallback (`ScheduleRepairCoordinator.TryFallback` reports it and puts the workbook reason in its offer or refusal details) | `TargetedReloadFlow` |
 | Reload-all loop, counters, details, and per-row results | `ReloadAllFlow` |
 | Workbook package, XML, string, coordinate, and fraction resource limits | `WorkbookReadLimits` |
 | Activation, fallback eligibility, final-success qualification, explicit-repair document policy, and safe ownership-advisory timing | `ScheduleIntegrityFlowDecisions` |
@@ -79,7 +89,9 @@ The four principal flows are:
 | Reload authorization decision | `ReloadDecisionTable` |
 | v1-to-v2 field normalization | `LinkMigrationNormalizer` |
 | Style facts and decision table | `StyleIntegrityPolicy.cs` and `StyleIntegrityDecisionTable` |
-| Pure width, row-height, character, and layout operations | `LayoutMetrics`, `ColumnWidthMath`, `RowHeightMath`, `CharWidth`, and `LayoutOps` |
+| Pure width, row-height, character, and layout operations | `LayoutMetrics`, `ColumnWidthMath`, `RowHeightMath`, `CharWidth`, `FitContentText`, and `LayoutOps` |
+| Native header-row fitting and one unique affected-row diagnostic | `HeaderRowFitter` |
+| Fixed-total Fit Content selection and estimate diagnostics | `FitContentText`, `LayoutOps`, `LayoutService`, and `UserMessages` |
 
 ## 4. Workbook input boundary
 
@@ -114,9 +126,10 @@ stored per Windows user, never in the model.
 
 ## 5. Link creation, reload, and repair
 
-`LinkExcelCommand` collects the workbook, worksheet, optional range, and width
-scale. It reads the workbook before the first model transaction. The mutation
-creates a method-B schedule, renders its header, and writes the v2 link entity.
+`LinkExcelCommand` collects the workbook, worksheet, and optional range. It reads
+the workbook before the first model transaction. The mutation creates a method-B
+schedule, renders its header with the fixed 1.5 initial width factor, fits header
+rows when the row policy requests it, and writes the v2 link entity.
 `HeaderTableRenderer` applies displayed text, merged cells, width/height policy,
 and the post-regeneration style-integrity check before the mutation can commit.
 
@@ -124,18 +137,23 @@ and the post-regeneration style-integrity check before the mutation can commit.
 reads the workbook outside the transaction, compares v2 source fingerprints,
 and asks `ReloadDecisionTable` plus `ReloadDialogs` to authorize the action. The
 render and metadata update then run through `ModelMutation`. `ReloadOutcome`
-preserves the identity, transaction, rollback, render, truncation, and view-width
-facts needed by the command and Link Manager.
+preserves the identity, transaction, rollback, render, truncation, view-width,
+column-count, and fitted-row diagnostic facts needed by the command and Link
+Manager. A changed rendered column count is only a hint: fixed ranges, same-count
+substitutions, and capped dimensions can evade it.
 
 `TargetedReloadFlow` runs the common sequence: reload, offer the separately
 consented current-table rebuild only for a known affected schedule with an
 unavailable workbook, rescan and store the final result when the caller requests
 that step, and set the targeted flow's final-success flag only when the final
 result is `Healthy`. The activation guard deliberately preserves its early
-return after an unsuccessful fallback. A fatal regeneration stops the flow
-before any rescan or later document access. `ReloadAllFlow` processes each
-resolved schedule independently, rescans cancelled and failed rows, never offers
-the current-table fallback, and stops on fatal regeneration.
+return after an unsuccessful fallback. Callers show reload outcomes only
+through `TargetedReloadFlow.ShowReloadOutcome`, which stays silent after a
+dispatched fallback; final-qualification warnings and fatal reporting keep
+their existing handling. A fatal regeneration stops the flow before any
+rescan or later document access. `ReloadAllFlow` processes each resolved
+schedule independently, rescans cancelled and failed rows, never offers the
+current-table fallback, and stops on fatal regeneration.
 
 `ScheduleRepairCoordinator` applies the explicit repair document policy,
 including read-only, detached-copy, and worksharing editability decisions. Its
@@ -177,19 +195,36 @@ user consent.
 
 `ExcelScheduleLink.Layout` contains no Revit or Open XML types. `LayoutMetrics`
 holds tuning constants; `CharWidth` measures text including CJK widths;
-`ColumnWidthMath` converts and clamps column widths; `RowHeightMath` supplies
-row-height values; and `LayoutOps` implements reset-to-Excel, fit-content merge
-constraints, even distribution, fit-to-total redistribution, clamping, and
-validation. Returned widths are finite and constrained to the supported range.
+`ColumnWidthMath` converts and clamps column widths; `FitContentText` selects
+headings and measures displayed text; `RowHeightMath` supplies estimated row
+heights; and `LayoutOps` implements reset-to-Excel, fixed-total Fit Content,
+merge constraints, even distribution, fit-to-total redistribution, clamping,
+and validation. Calculated or changed widths are finite and constrained to the
+supported range. Validation deliberately preserves a live-equal native width
+even when that existing width is outside the supported range.
 
 `LayoutService` reads current header widths, computes candidates through the pure
-library, validates before starting a mutation transaction, and uses `ModelMutation` for widths,
-body-column synchronization, style validation, and optional link-policy storage.
+library, validates before starting a mutation transaction, and uses `ModelMutation`
+for widths, body-column synchronization, row fitting, style validation, and
+optional link-policy storage. Fit Content measures the rendered header and uses
+the current candidate total in the dialog or the current live total in Quick
+Layout when that total is supported. Distribute Evenly uses the dialog's current
+candidates or, from Quick Layout, the live widths, clamped to the column bounds;
+Restore Excel Widths reads the linked worksheet and can change the total. The
+dialog displays headings as a letter plus a short heading, reports
+protected-value and merged-cell shortages, and shows an estimated comfortable
+width; Fit to Total is the explicit widening action. Changed typed widths are
+shown in project units and use the 30.5–609.6 mm / 1.20–24.00 in display range.
+An unchanged native width can remain outside that range.
 The Column Widths dialog edits candidate widths and can invoke a command-owned
 Apply callback while remaining open. `LayoutDialogCommand` re-verifies and
-authorizes each Apply. After a successful Apply, Cancel or Discard drops only
-unapplied edits and preserves the committed changes. Quick-layout commands use
-the same service.
+authorizes each Apply. Fit-to-text sets header-row heights during Apply and can
+shorten or enlarge them; Keep disables fitting and leaves heights alone during
+Apply. Reload captures and restores saved heights where possible and reports
+rows Revit did not keep. A fitting limitation is a successful action with a
+warning, not an automatic rollback. After a successful Apply, Cancel or Discard
+drops only unapplied edits and preserves the committed changes. Quick-layout
+commands use the same service.
 
 ## 8. Persistence contract
 
@@ -212,9 +247,10 @@ mutation transaction.
 
 `RibbonApplication` creates the production ribbon and connects Link, Reload,
 Link Manager, Column Widths, and Quick Layout commands. `LinkManagerDialog`
-lists linked schedules, displays source and integrity status, saves per-link
-width/height settings, and delegates selected reload, reload-all, and repair to
-the services above.
+lists linked schedules with six register columns, displays source and integrity
+status, and delegates selected reload, reload-all, and repair to the services
+above. It has no per-link settings editor or settings-save prompt; Column Widths
+owns the column and row reload policies.
 
 WinForms dialogs inherit Revit's DPI awareness and default font behavior. They do
 not force a DPI context, form-level font, `AutoScaleMode`, or modal owner. Layouts
@@ -233,9 +269,15 @@ Unicode content.
 - `ModelMutation` classifies native and probe regeneration failures as fatal and
   performs only internal transaction cleanup before returning; its callers stop
   the action without follow-up document reads.
+- A fatal regeneration shows one user message, stops further automatic work for
+  that document session, and preserves a mutation that had already committed
+  before the failure. This is separate from ordinary rollback and from the
+  visual question of whether fitted text is fully visible.
 - A committed reload or repair can subsequently fail final integrity
   qualification without undoing its committed changes. Bulk reload processes
   schedules independently.
+- Bulk reload isolates ordinary per-link failures, but a fatal regeneration
+  failure ends the batch before later links are processed.
 - The temporary-copy reader does not hold the source workbook open, and formulas
   are not recalculated; cached workbook values are displayed.
 - Package expansion, parsed strings, coordinates, schedule scans, and rendered
@@ -262,6 +304,15 @@ by default, creates the runtime distribution, and optionally creates a source-fr
 ZIP with a SHA-256 checksum. Build output, package output, generated PDFs,
 screenshots, Revit models, archives, runtime evidence, credentials, and
 environment files are outputs or local data, not implementation sources.
+
+`tools/UiHarness` renders the real Link and Column Widths dialogs for layout
+checks. Its Link Manager image is a separate hand-maintained preview and is not
+acceptance evidence for the production Manager. Native Revit checks remain
+necessary for row-height sufficiency, wrapping, rollback, and display scaling.
+The row estimator was calibrated on screen at 150% with Arial; very long Latin
+prose can wrap one line more than estimated, sheet/PDF checks cover the tested
+tables rather than every font or table size, and 500-row performance has not
+yet been measured.
 
 The repository history should contain source, tests, scripts, public
 documentation, and small reproducible fixtures. Ignoring an output does not

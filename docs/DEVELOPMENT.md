@@ -49,13 +49,14 @@ been compared explicitly.
 | `src/ExcelScheduleLink.Revit2024` | Ribbon, dialogs, Revit transactions, rendering, reload, persistence, and QA probes |
 | `src/ExcelScheduleLink.Probe.OpenXmlPayload` | Developer-only payload for an isolated Open XML loading probe |
 | `tests/ExcelScheduleLink.Excel.OpenXml.Tests` | Unit and workbook-reader tests |
-| `tools/UiHarness` | Renders real WinForms dialogs outside Revit for automated layout checks |
+| `tools/UiHarness` | Renders the real Link and Column Widths dialogs outside Revit for automated layout checks; its Link Manager view is a separate hand-maintained preview |
 | `scripts` | Build, package, install, uninstall, and end-user preflight scripts |
 | `testdata` | Small workbook fixtures and their generators |
 
 The UI harness is deliberately outside `ExcelScheduleLink.sln`. It compiles
-the real dialog source and reports controls that fall outside their parent
-client areas.
+the real Link and Column Widths dialog source and reports controls that fall
+outside their parent client areas. The Manager preview is maintained separately
+and is not evidence for the production Revit Manager.
 
 ## What is rendered
 
@@ -66,10 +67,14 @@ in the workbook; it does not recalculate formulas. The render window is limited
 to 500 rows by 50 columns, and larger input is accompanied by a truncation
 notice.
 
-Fonts, colors, borders, row-height tools, images, charts, conditional
+Fonts, colors, borders, Excel row heights, images, charts, conditional
 formatting, automatic file watching, and write-back to Excel are not currently
-implemented. Revit remains responsible for schedule appearance settings such
-as font size and grid display.
+copied. The add-in's Fit rows to text policy estimates and sets Revit header-row
+heights on Link, Reload and Column Widths Apply. Keep current row heights
+disables text fitting; a Column Widths Apply leaves current heights alone, while
+Reload captures and restores them where possible and reports rows Revit could
+not keep. Revit remains responsible for schedule appearance settings such as
+font size and grid display.
 
 ## Revit constraints
 
@@ -86,10 +91,11 @@ forced DPI context, form-level font, `AutoScaleMode`, or owner behavior without
 both UI-harness rendering and real Revit/high-DPI verification.
 
 Each workbook read completes before a Revit transaction starts. Each model
-mutation is one transaction, and a failed link, reload, render, or layout
-operation must not leave a partial model change. Style integrity is checked
-after regeneration before a mutation can commit; an unsafe or indeterminate
-result is not reported as a successful commit.
+mutation is one transaction. A failure while that mutation is open attempts
+rollback; a later post-commit integrity check can report failure without
+undoing committed changes. Style integrity is checked after regeneration before
+a mutation can commit; an unsafe or indeterminate result is not reported as a
+successful commit.
 
 ## Stored link data
 
@@ -130,6 +136,35 @@ QA and probe command classes are compiled into the Revit DLL so the same code
 can be exercised by maintainers. They are not registered by the production
 manifest, and the probe manifest and payload are not shipped to end users.
 
+## Release behavior and evidence boundaries
+
+Fit Content is a fixed-total allocation when the current candidate or live total
+is within the supported total-width range. Outside that range, it falls back to
+all-minimum or all-maximum column widths and warns that the total cannot be kept.
+The Column Widths dialog uses the current candidate total and Quick Layout uses
+the live table total. The allocator protects number/date/code-like values when
+possible, reports wrapping or short merged cells, and displays an estimated
+comfortable width. Fit to Total is the explicit widening action. Restore Excel
+Widths reads the current worksheet and can change the total. Column labels come
+from the topmost eligible single-column non-blank cell and are shown as a letter
+plus a short heading; merged title cells are skipped. Changed typed widths are
+presented in project units, with the current supported display range of 30.5 to
+609.6 mm or 1.20 to 24.00 in. A pre-existing native width outside that range can
+remain when it is not changed in the dialog.
+
+Row fitting is an estimate calibrated on screen at 150% display scaling with
+Arial. Very long Latin prose can wrap one line more than estimated. Sheet and
+PDF output has been checked for the tested tables, not for every font or table
+size. Performance for a 500-row table has not yet been measured. The UI harness
+does not prove native Revit wrapping, row-height sufficiency, transactions,
+rollback, or real display scaling.
+
+If Revit reports a regeneration failure, the add-in shows one message and stops
+further automatic work for that document session. A change that completed before
+the failure remains. This behavior, and the distinction between a successful
+action with a row-fitting warning and visual proof that every line is visible,
+must be checked separately in Revit.
+
 ## Developer troubleshooting
 
 If the source build cannot find an SDK, confirm the pinned feature band with:
@@ -146,6 +181,7 @@ from stale DLLs in `bin` or `dist`; rebuild the relevant project.
 
 For dialog layout changes, build `tools\UiHarness\UiHarness.csproj` and run
 the harness against a temporary output directory. Inspect the generated text
-reports and confirm that no visible control is marked `CLIPPED`. Real Revit
-acceptance still requires a disposable model and cannot be replaced by the
-harness.
+reports and confirm that no visible control is marked `CLIPPED`. The harness
+checks the real Link and Column Widths dialogs; its Manager preview is not a
+production Manager capture. Real Revit acceptance still requires a disposable
+model and cannot be replaced by the harness.

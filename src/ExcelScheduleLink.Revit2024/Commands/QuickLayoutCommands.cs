@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
 using ExcelScheduleLink.Layout;
 using ExcelScheduleLink.Revit2024.Link;
+using ExcelScheduleLink.Revit2024.UI;
 
 namespace ExcelScheduleLink.Revit2024.Commands
 {
@@ -13,6 +15,7 @@ namespace ExcelScheduleLink.Revit2024.Commands
         public double[] Feet;      // null when the preset could not produce widths
         public string Error;       // shown instead of applying
         public string Note;        // shown after a successful apply (e.g. merge deficit)
+        public IReadOnlyList<string> ColumnHeadings;
         public LayoutSourceSnapshot SourceSnapshot; // set when Restore Excel read a source
     }
 
@@ -25,6 +28,18 @@ namespace ExcelScheduleLink.Revit2024.Commands
     {
         public static Result Run(
             ExternalCommandData commandData, ref string message,
+            Func<Document, ViewSchedule, double[], QuickLayoutCandidates> compute,
+            ColumnWidthMode? modeToSave)
+        {
+            return FatalRegenerationBoundary.RunCommand(ref message,
+                delegate
+                {
+                    return RunCore(commandData, compute, modeToSave);
+                });
+        }
+
+        private static Result RunCore(
+            ExternalCommandData commandData,
             Func<Document, ViewSchedule, double[], QuickLayoutCandidates> compute,
             ColumnWidthMode? modeToSave)
         {
@@ -45,7 +60,13 @@ namespace ExcelScheduleLink.Revit2024.Commands
             }
             ViewSchedule schedule = target.Schedule;
 
-            double[] currentFeet = LayoutService.GetCurrentWidths(schedule);
+            double[] currentFeet;
+            if (!LayoutService.TryGetCurrentWidths(schedule, out currentFeet))
+            {
+                TaskDialog.Show(
+                    UserMessages.DialogTitle, UserMessages.LayoutDimensionsReadFailed);
+                return Result.Cancelled;
+            }
             if (currentFeet.Length == 0)
             {
                 TaskDialog.Show(UserMessages.DialogTitle, UserMessages.LayoutNoColumns);
@@ -69,7 +90,8 @@ namespace ExcelScheduleLink.Revit2024.Commands
             }
 
             LayoutApplyResult applied = LayoutService.Apply(
-                doc, schedule, candidates.Feet, modeToSave, null, true);
+                doc, schedule, candidates.Feet, modeToSave, null, null, true,
+                columnHeadings: candidates.ColumnHeadings);
 
             string summary = applied.UserMessage;
             if (applied.Success && !string.IsNullOrEmpty(candidates.Note))
@@ -80,7 +102,6 @@ namespace ExcelScheduleLink.Revit2024.Commands
 
             if (!applied.Success)
             {
-                message = applied.UserMessage;
                 return Result.Failed;
             }
             return Result.Succeeded;
@@ -96,15 +117,25 @@ namespace ExcelScheduleLink.Revit2024.Commands
             return QuickLayoutRunner.Run(commandData, ref message,
                 delegate (Document doc, ViewSchedule schedule, double[] currentFeet)
                 {
-                    double scale = LayoutService.GetWidthScale(schedule);
-                    FitContentResult fit = LayoutService.ComputeFitContent(schedule, scale);
-                    QuickLayoutCandidates c = new QuickLayoutCandidates { Feet = fit.Feet };
-                    if (fit.UnresolvedDeficit > LayoutOps.Tolerance)
+                    FitContentResult fit = LayoutService.ComputeFitContent(
+                        doc, schedule, currentFeet);
+                    if (fit == null || !fit.Success || fit.Feet == null)
                     {
-                        c.Note = UserMessages.LayoutFitContentPartial(
-                            fit.UnresolvedDeficit * LayoutMetrics.InchesPerFoot);
+                        return new QuickLayoutCandidates
+                        {
+                            Error = fit != null && !string.IsNullOrEmpty(fit.UserMessage)
+                                ? fit.UserMessage
+                                : UserMessages.LayoutFitContentReadFailed
+                        };
                     }
-                    return c;
+                    LengthUnitChoice unit = LayoutService.ResolveLengthUnit(doc);
+                    return new QuickLayoutCandidates
+                    {
+                        Feet = fit.Feet,
+                        ColumnHeadings = fit.ColumnHeadings,
+                        Note = LengthUnitHelper.FitContentNotes(
+                            fit.FixedTotal, unit, fit.ColumnHeadings)
+                    };
                 },
                 ColumnWidthMode.KeepManualWidths); // an intentional layout: keep it on reload
         }
@@ -132,7 +163,7 @@ namespace ExcelScheduleLink.Revit2024.Commands
 
     /// <summary>
     /// Re-reads the linked worksheet and applies the widths it defines. The reload
-    /// policy is deliberately left untouched (design v0.8.0 6).
+    /// policies are deliberately left untouched (design v0.8.0 6).
     /// </summary>
     [Transaction(TransactionMode.Manual)]
     public class RestoreExcelWidthsCommand : IExternalCommand

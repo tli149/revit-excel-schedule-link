@@ -131,7 +131,6 @@ namespace ExcelScheduleLink.Revit2024.Commands
                     bool rollbackVerified = started
                         && TransactionRollback.RollBackIfStarted(transaction)
                             == TransactionStatus.RolledBack;
-                    message = ex.Message;
                     TaskDialog.Show(
                         Title,
                         "The explicit no-border style could not be applied.\n\n"

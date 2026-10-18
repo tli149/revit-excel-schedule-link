@@ -50,10 +50,17 @@ namespace ExcelScheduleLink.Revit2024.Link
         {
             public int RowsRendered;
             public int ColumnsRendered;
+            public int? PreviousColumns;
             public bool Truncated;
 
             /// <summary>Header columns whose width Revit refused (0 = all applied).</summary>
             public int ColumnWidthsRejected;
+
+            /// <summary>Keep row heights Revit refused or did not retain (0 = all retained).</summary>
+            public int RowHeightsRejected;
+
+            /// <summary>Distinct header rows whose fitted text may remain hidden.</summary>
+            public int? RowsMayHideText = 0;
 
             /// <summary>False when the body column could not be matched to the table width.</summary>
             public bool BodyWidthApplied;
@@ -71,7 +78,7 @@ namespace ExcelScheduleLink.Revit2024.Link
         public static RenderResult Render(ViewSchedule schedule, SheetModel sheet, double widthScale)
         {
             return Render(schedule, sheet, widthScale,
-                ColumnWidthMode.ApplyExcelWidths, RowHeightMode.ApplyExcelHeights);
+                ColumnWidthMode.ApplyExcelWidths, RowHeightMode.UseDefaultHeights);
         }
 
         /// <summary>
@@ -84,6 +91,7 @@ namespace ExcelScheduleLink.Revit2024.Link
             ColumnWidthMode columnWidthMode, RowHeightMode rowHeightMode)
         {
             TableSectionData tsd = schedule.GetTableData().GetSectionData(SectionType.Header);
+            int previousColumns = tsd.NumberOfColumns;
 
             // Capture existing layout before clearing (only when preserving it).
             double[] keptWidths = columnWidthMode == ColumnWidthMode.KeepManualWidths
@@ -131,7 +139,9 @@ namespace ExcelScheduleLink.Revit2024.Link
 
             int widthsRejected =
                 ApplyColumnWidths(tsd, sheet, widthScale, columns, c0, columnWidthMode, keptWidths);
-            ApplyRowHeights(tsd, rows, r0, rowHeightMode, keptHeights);
+            bool[] restoredRows;
+            int rowHeightsRejected =
+                ApplyRowHeights(tsd, rows, r0, rowHeightMode, keptHeights, out restoredRows);
 
             // Merged cells (TableMergedCell takes top, left, bottom, right).
             // Ranges that cross the truncation boundary are skipped.
@@ -147,10 +157,11 @@ namespace ExcelScheduleLink.Revit2024.Link
                 tsd.MergeCells(cell);
             }
 
-            // Widths are read back rather than re-derived: Revit may have clamped
-            // or refused a value, and the body column must match what the table
-            // actually became.
-            bool bodyApplied = SetBodyColumnWidth(schedule, SumColumnWidths(tsd, columns, c0));
+            // Widths are read back rather than re-derived: Revit may have refused
+            // a value, and the body column must match what the table became.
+            double headerTotal;
+            bool bodyApplied = TryGetHeaderWidthTotal(schedule, out headerTotal)
+                && SetBodyColumnWidth(schedule, headerTotal);
 
             StyleIntegrityResult integrity =
                 ScheduleStyleIntegrityScanner.ScanAfterMutationInOpenTransaction(
@@ -172,12 +183,22 @@ namespace ExcelScheduleLink.Revit2024.Link
                 throw new UnsafeScheduleStyleException(integrity);
             }
 
+            int? rowsMayHideText;
+            integrity = HeaderRowFitter.FitAndValidateInOpenTransaction(
+                schedule, rowHeightMode, integrity, true, out rowsMayHideText);
+
+            rowHeightsRejected +=
+                CountChangedRestoredRows(schedule, keptHeights, restoredRows);
+
             RenderResult result = new RenderResult();
             result.RowsRendered = rows;
             result.ColumnsRendered = columns;
+            result.PreviousColumns = previousColumns > 0 ? (int?)previousColumns : null;
             result.Truncated = sheet.SourceRowCount > rows
                 || sheet.SourceColumnCount > columns;
             result.ColumnWidthsRejected = widthsRejected;
+            result.RowHeightsRejected = rowHeightsRejected;
+            result.RowsMayHideText = rowsMayHideText;
             result.BodyWidthApplied = bodyApplied;
             result.IntegrityResult = integrity;
             return result;
@@ -207,26 +228,35 @@ namespace ExcelScheduleLink.Revit2024.Link
             return rejected;
         }
 
-        private static void ApplyRowHeights(
-            TableSectionData tsd, int rows, int r0, RowHeightMode mode, double[] keptHeights)
+        private static int ApplyRowHeights(
+            TableSectionData tsd, int rows, int r0, RowHeightMode mode,
+            double[] keptHeights, out bool[] restoredRows)
         {
-            // Initial render (ApplyExcelHeights) leaves Revit's automatic row
-            // sizing so content is never clipped. A forced uniform height is
-            // deliberately deferred until the column widths are calibrated: a
-            // fixed single-line height with too-narrow columns clips text instead
-            // of wrapping (worse than wrapping). KeepManualHeights still restores
-            // the heights the user set (captured before the section was cleared).
+            restoredRows = new bool[rows];
+            // Non-Keep rows are fitted after widths, merges, body sync and the
+            // initial Healthy scan. KeepManualHeights still restores the heights
+            // the user set (captured before the section was cleared).
             if (mode != RowHeightMode.KeepManualHeights || keptHeights == null)
             {
-                return;
+                return 0;
             }
+            int rejected = 0;
             for (int r = 0; r < rows && r < keptHeights.Length; r++)
             {
-                if (keptHeights[r] > 0)
+                double feet = keptHeights[r];
+                if (feet > 0.0)
                 {
-                    TrySetRowHeight(tsd, r0 + r, keptHeights[r]);
+                    if (TrySetRowHeight(tsd, r0 + r, feet))
+                    {
+                        restoredRows[r] = true;
+                    }
+                    else
+                    {
+                        rejected++;
+                    }
                 }
             }
+            return rejected;
         }
 
         private static double[] CaptureColumnWidths(TableSectionData tsd)
@@ -256,18 +286,15 @@ namespace ExcelScheduleLink.Revit2024.Link
         }
 
         /// <summary>
-        /// Sets a column width, clamping to the accepted range. A rejected value
-        /// (Revit may still refuse a width that is valid in isolation but too
-        /// large for the current section total) leaves the column as it is and
-        /// returns false, so the caller can tell the user instead of leaving a
-        /// squeezed table that looks like a failed load.
+        /// Attempts the supplied native feet value. A rejected value leaves the
+        /// column as it is and returns false, so the caller can tell the user
+        /// instead of leaving a squeezed table that looks like a failed load.
         /// </summary>
         private static bool TrySetColumnWidth(TableSectionData tsd, int column, double feet)
         {
-            double clamped = ColumnWidthConverter.Clamp(feet);
             try
             {
-                tsd.SetColumnWidth(column, clamped);
+                tsd.SetColumnWidth(column, feet);
                 return true;
             }
             catch (Autodesk.Revit.Exceptions.ArgumentException)
@@ -276,37 +303,17 @@ namespace ExcelScheduleLink.Revit2024.Link
             }
         }
 
-        /// <summary>Total of the widths the header columns actually ended up with (feet).</summary>
-        private static double SumColumnWidths(TableSectionData tsd, int columns, int c0)
-        {
-            double total = 0.0;
-            for (int c = 0; c < columns; c++)
-            {
-                try
-                {
-                    total += tsd.GetColumnWidth(c0 + c);
-                }
-                catch (Autodesk.Revit.Exceptions.ArgumentException)
-                {
-                    // Unreadable column: the total is only used to size the body
-                    // column, so a slightly low total is better than failing.
-                }
-            }
-            return total;
-        }
-
         /// <summary>
         /// Matches the single method-B body column to the rendered table width.
         ///
-        /// The schedule VIEW lays the header (title) section out inside the body
-        /// section's width. The body column is created by ScheduleFactory and
-        /// keeps whatever default width Revit gives it, so a table wider than
-        /// that default gets squeezed in the view: one header column absorbs the
-        /// entire deficit and collapses to a single character, which reads as a
-        /// failed load. Sheet placement is unaffected because it uses the header
-        /// widths directly - that is why the defect is view-only.
+        /// Revit 2024 can stretch header columns when GridColumnWidth is set.
+        /// The body therefore targets the exact actual header total; positive
+        /// padding would enlarge the header on every write. If the body is
+        /// narrower than the header, the editor can still squeeze a column, but
+        /// matching the actual total removes that known deficit.
         ///
-        /// Only GridColumnWidth (the schedule-view width) is written.
+        /// An already-equal target is left alone, and only GridColumnWidth (the
+        /// schedule-view width) is written.
         /// SheetColumnWidth is deliberately left alone: sheet output is already
         /// correct and must not be disturbed.
         ///
@@ -330,10 +337,20 @@ namespace ExcelScheduleLink.Revit2024.Link
                 {
                     return false;
                 }
-                definition.GetField(0).GridColumnWidth = target;
+                ScheduleField field = definition.GetField(0);
+                if (field == null)
+                {
+                    return false;
+                }
+                if (Math.Abs(field.GridColumnWidth - target) <= LayoutOps.Tolerance)
+                {
+                    return true;
+                }
+                field.GridColumnWidth = target;
                 return true;
             }
-            catch (Autodesk.Revit.Exceptions.ApplicationException)
+            catch (Autodesk.Revit.Exceptions.ApplicationException ex)
+                when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 // Revit refused the total (its own column-width limit). The link
                 // itself is valid; only the schedule view stays narrow.
@@ -349,30 +366,94 @@ namespace ExcelScheduleLink.Revit2024.Link
             {
                 TableSectionData tsd = schedule.GetTableData().GetSectionData(SectionType.Header);
                 int columns = tsd.NumberOfColumns;
+                if (columns <= 0)
+                {
+                    return false;
+                }
                 int firstColumn = tsd.FirstColumnNumber;
                 for (int column = 0; column < columns; column++)
                 {
-                    total += tsd.GetColumnWidth(firstColumn + column);
+                    double width = tsd.GetColumnWidth(firstColumn + column);
+                    if (width <= 0.0 || double.IsNaN(width) || double.IsInfinity(width))
+                    {
+                        total = 0.0;
+                        return false;
+                    }
+                    total += width;
+                    if (double.IsNaN(total) || double.IsInfinity(total))
+                    {
+                        total = 0.0;
+                        return false;
+                    }
                 }
-                return total > 0.0 && !double.IsNaN(total) && !double.IsInfinity(total);
+                if (total <= 0.0 || double.IsNaN(total) || double.IsInfinity(total))
+                {
+                    total = 0.0;
+                    return false;
+                }
+                return true;
             }
-            catch (Exception)
+            catch (Autodesk.Revit.Exceptions.ArgumentException)
             {
                 total = 0.0;
                 return false;
             }
         }
 
-        private static void TrySetRowHeight(TableSectionData tsd, int row, double feet)
+        private static bool TrySetRowHeight(TableSectionData tsd, int row, double feet)
         {
             try
             {
                 tsd.SetRowHeight(row, feet);
+                return true;
             }
             catch (Autodesk.Revit.Exceptions.ArgumentException)
             {
-                // Height not accepted -- leave the row at its current height.
+                return false;
             }
+        }
+
+        private static int CountChangedRestoredRows(
+            ViewSchedule schedule, double[] keptHeights, bool[] restoredRows)
+        {
+            if (keptHeights == null || restoredRows == null)
+            {
+                return 0;
+            }
+
+            TableSectionData tsd =
+                schedule.GetTableData().GetSectionData(SectionType.Header);
+            int rows = tsd.NumberOfRows;
+            int r0 = tsd.FirstRowNumber;
+            int rejected = 0;
+            int limit = Math.Min(restoredRows.Length, keptHeights.Length);
+            for (int offset = 0; offset < limit && offset < rows; offset++)
+            {
+                if (!restoredRows[offset])
+                {
+                    continue;
+                }
+
+                double actual;
+                try
+                {
+                    actual = tsd.GetRowHeight(r0 + offset);
+                }
+                catch (Autodesk.Revit.Exceptions.ArgumentException)
+                {
+                    rejected++;
+                    continue;
+                }
+
+                if (actual <= 0.0
+                    || double.IsNaN(actual)
+                    || double.IsInfinity(actual)
+                    || Math.Abs(actual - keptHeights[offset]) > LayoutOps.Tolerance)
+                {
+                    rejected++;
+                }
+            }
+            return rejected;
         }
 
         /// <summary>Shrinks the header section back to a single empty cell.</summary>

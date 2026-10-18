@@ -25,7 +25,7 @@ namespace ExcelScheduleLink.Revit2024.Link
             {
                 workshared = doc.IsWorkshared;
             }
-            catch (Exception)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 return CreatorRelation.Unavailable;
             }
@@ -50,7 +50,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                     ? CreatorRelation.Same
                     : CreatorRelation.Different;
             }
-            catch (Exception)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 creator = string.Empty;
                 return CreatorRelation.Unavailable;
@@ -72,7 +72,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                     return CreatorRelation.Same;
                 }
             }
-            catch (Exception)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 return CreatorRelation.Unavailable;
             }

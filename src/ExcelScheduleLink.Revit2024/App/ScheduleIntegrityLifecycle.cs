@@ -55,48 +55,55 @@ namespace ExcelScheduleLink.Revit2024.App
                 return;
             }
 
-            // A linked RVT also raises DocumentOpened but can never be edited in
-            // this session, so every link in it would be reported "not checked"
-            // for no actionable reason; its schedules cannot be opened from the
-            // host anyway. Family documents carry no Excel-linked schedules.
-            if (doc.IsLinked || doc.IsFamilyDocument)
-            {
-                return;
-            }
-
-            ScheduleIntegrityDocumentState state =
-                ScheduleIntegritySessionCache.BeginAutomatic(doc);
+            ScheduleIntegrityDocumentState state = null;
             try
             {
-                if (doc.IsReadOnly)
+                // A linked RVT also raises DocumentOpened but can never be edited in
+                // this session, so every link in it would be reported "not checked"
+                // for no actionable reason; its schedules cannot be opened from the
+                // host anyway. Family documents carry no Excel-linked schedules.
+                if (doc.IsLinked || doc.IsFamilyDocument)
                 {
-                    // ScanAutomatic creates one indeterminate record per link
-                    // without attempting a transaction; it is intentionally not
-                    // a repair or a persistent write.
+                    return;
+                }
+
+                state = ScheduleIntegritySessionCache.BeginAutomatic(doc);
+                try
+                {
+                    if (doc.IsReadOnly)
+                    {
+                        // ScanAutomatic creates one indeterminate record per link
+                        // without attempting a transaction; it is intentionally not
+                        // a repair or a persistent write.
+                        ScheduleIntegritySessionCache.ScanAutomatic(doc);
+                        state.MarkReadOnlyAtOpen();
+                        QueueNotification(state);
+                        return;
+                    }
+
+                    if (doc.IsModifiable)
+                    {
+                        // An active transaction is not ours. Idling gets one retry.
+                        state.ScheduleRetry();
+                        return;
+                    }
+
                     ScheduleIntegritySessionCache.ScanAutomatic(doc);
-                    state.MarkReadOnlyAtOpen();
                     QueueNotification(state);
-                    return;
                 }
-
-                if (doc.IsModifiable)
+                catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
                 {
-                    // An active transaction is not ours. Idling gets one retry.
-                    state.ScheduleRetry();
-                    return;
+                    // Opening a document must not be interrupted by an add-in scan.
+                    // Preserve an honest not-checked state for the later Idling
+                    // warning, without showing a dialog in DocumentOpened.
+                    state.ClearResults();
+                    state.RecordDocumentLevelFailure(ex);
+                    QueueNotification(state);
                 }
-
-                ScheduleIntegritySessionCache.ScanAutomatic(doc);
-                QueueNotification(state);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ModelMutation.IsFatalRegeneration(ex))
             {
-                // Opening a document must not be interrupted by an add-in scan.
-                // Preserve an honest not-checked state for the later Idling
-                // warning, without showing a dialog in DocumentOpened.
-                state.ClearResults();
-                state.RecordDocumentLevelFailure(ex);
-                QueueNotification(state);
+                FatalRegenerationBoundary.ContainInEventHandler();
             }
         }
 
@@ -106,8 +113,15 @@ namespace ExcelScheduleLink.Revit2024.App
             {
                 // DocumentClosing is cancellable. Keep the state until the
                 // paired DocumentClosed event reports a successful close.
-                ScheduleIntegritySessionCache.MarkClosing(
-                    args.DocumentId, args.Document);
+                try
+                {
+                    ScheduleIntegritySessionCache.MarkClosing(
+                        args.DocumentId, args.Document);
+                }
+                catch (Exception ex) when (ModelMutation.IsFatalRegeneration(ex))
+                {
+                    FatalRegenerationBoundary.ContainInEventHandler();
+                }
             }
         }
 
@@ -133,24 +147,38 @@ namespace ExcelScheduleLink.Revit2024.App
 
         private void OnIdling(object sender, Autodesk.Revit.UI.Events.IdlingEventArgs args)
         {
+            FatalRegenerationBoundary.ShowDeferredMessage();
+
             // This is the common idle path in a Revit session. Avoid both the
             // state-list allocation and any document walk when there is no
             // retry or pending notification.
-            if (!ScheduleIntegritySessionCache.HasPendingWork())
+            try
             {
-                return;
-            }
+                if (!ScheduleIntegritySessionCache.HasPendingWork())
+                {
+                    return;
+                }
 
-            ScheduleIntegritySessionCache.PruneInvalidDocuments();
-            if (!ScheduleIntegritySessionCache.HasPendingWork())
-            {
-                return;
-            }
+                ScheduleIntegritySessionCache.PruneInvalidDocuments();
+                if (!ScheduleIntegritySessionCache.HasPendingWork())
+                {
+                    return;
+                }
 
-            foreach (ScheduleIntegrityDocumentState state in
-                ScheduleIntegritySessionCache.GetPendingStates())
+                long fatals = ModelMutation.FatalRegenerationCount;
+                foreach (ScheduleIntegrityDocumentState state in
+                    ScheduleIntegritySessionCache.GetPendingStates())
+                {
+                    ProcessPendingState(state);
+                    if (ModelMutation.FatalRegenerationCount != fatals)
+                    {
+                        return;
+                    }
+                }
+            }
+            catch (Exception ex) when (ModelMutation.IsFatalRegeneration(ex))
             {
-                ProcessPendingState(state);
+                FatalRegenerationBoundary.ContainInEventHandler();
             }
         }
 
@@ -170,6 +198,11 @@ namespace ExcelScheduleLink.Revit2024.App
                     ScheduleIntegritySessionCache.ScanAutomatic(state.Document);
                     state.CompleteRetry();
                     QueueNotification(state);
+                }
+                catch (Exception ex) when (ModelMutation.IsFatalRegeneration(ex))
+                {
+                    FatalRegenerationBoundary.ContainInEventHandler();
+                    return;
                 }
                 catch (Exception ex)
                 {
@@ -195,6 +228,11 @@ namespace ExcelScheduleLink.Revit2024.App
                     {
                         RunAutomaticRepairs(state);
                     }
+                }
+                catch (Exception ex) when (ModelMutation.IsFatalRegeneration(ex))
+                {
+                    FatalRegenerationBoundary.ContainInEventHandler();
+                    return;
                 }
                 catch (Exception)
                 {
@@ -288,6 +326,12 @@ namespace ExcelScheduleLink.Revit2024.App
                 TaskDialog.Show(UserMessages.DialogTitle,
                     UserMessages.CheckAndRepairSummary(
                         outcome.Summary, outcome.Details));
+            }
+            catch (Exception ex) when (ModelMutation.IsFatalRegeneration(ex))
+            {
+                // Defer the message to the next Idling, and let the cache drop
+                // the retained state before another lookup.
+                FatalRegenerationBoundary.ContainInEventHandler();
             }
             catch (Exception ex)
             {

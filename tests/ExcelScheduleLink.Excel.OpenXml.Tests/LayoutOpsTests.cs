@@ -351,6 +351,76 @@ namespace ExcelScheduleLink.Excel.OpenXml.Tests
             Assert.NotSame(feet, r.Feet);
         }
 
+        [Fact]
+        public void PerColumnBounds_AllocateExtrasWithZeroFloors()
+        {
+            var result = LayoutOps.FitToTotalFeet(
+                new double[] { 1.0, 3.0, 0.0 }, 1.0,
+                new double[] { 0.0, 0.0, 0.0 },
+                new double[] { 0.2, 0.9, 0.5 });
+
+            Assert.True(result.Achievable);
+            Assert.Equal(0.2, result.Feet[0], 12);
+            Assert.Equal(0.8, result.Feet[1], 12);
+            Assert.Equal(0.0, result.Feet[2], 12);
+            Assert.Equal(1.0, result.Feet.Sum(), 12);
+        }
+
+        [Fact]
+        public void PerColumnBounds_RejectMalformedBounds()
+        {
+            Assert.Throws<ArgumentException>(() => LayoutOps.FitToTotalFeet(
+                new double[] { 1.0 }, 1.0,
+                new double[0], new double[] { 1.0 }));
+            Assert.Throws<ArgumentException>(() => LayoutOps.FitToTotalFeet(
+                new double[] { 1.0 }, 1.0,
+                new double[] { 0.5 }, new double[] { 0.4 }));
+            Assert.Throws<ArgumentException>(() => LayoutOps.FitToTotalFeet(
+                new double[] { 1.0 }, 1.0,
+                new double[] { -0.1 }, new double[] { 1.0 }));
+            Assert.Throws<ArgumentException>(() => LayoutOps.FitToTotalFeet(
+                new double[] { 1.0 }, 1.0,
+                new double[] { double.NaN }, new double[] { 1.0 }));
+            Assert.Throws<ArgumentException>(() => LayoutOps.FitToTotalFeet(
+                new double[] { 1.0, 1.0 }, 1.0,
+                new double[] { 0.0, 0.0 },
+                new double[] { double.MaxValue, double.MaxValue }));
+            Assert.Throws<ArgumentException>(() => LayoutOps.FitToTotalFeet(
+                null, 0.0, new double[] { 0.0 }, new double[] { 1.0 }));
+        }
+
+        [Fact]
+        public void MergeBounds_DefaultOverloadPreservesExistingResults()
+        {
+            double[] feet = { 0.5, 1.25, 0.75 };
+            MergeRequirement[] merges =
+            {
+                new MergeRequirement
+                {
+                    FirstColumn = 0,
+                    LastColumn = 1,
+                    RequiredFeet = 2.5
+                },
+                new MergeRequirement
+                {
+                    FirstColumn = 1,
+                    LastColumn = 2,
+                    RequiredFeet = 3.0
+                }
+            };
+
+            MergeFitResult legacy = LayoutOps.ApplyMergeConstraints(
+                feet, merges);
+            MergeFitResult bounded = LayoutOps.ApplyMergeConstraints(
+                feet, merges, LayoutMetrics.MinColumnFeet,
+                LayoutMetrics.MaxColumnFeet);
+
+            Assert.Equal(legacy.Feet, bounded.Feet);
+            Assert.Equal(legacy.UnresolvedDeficit,
+                bounded.UnresolvedDeficit, 12);
+            Assert.Equal(feet, new[] { 0.5, 1.25, 0.75 });
+        }
+
         // ---------------- ClampAll / ValidateAll ----------------
 
         [Fact]
@@ -369,9 +439,36 @@ namespace ExcelScheduleLink.Excel.OpenXml.Tests
             var v = LayoutOps.ValidateAll(new double[] { double.NaN, 3.0, 0.5 }, null);
             Assert.False(v.IsValid);
             Assert.Equal(new[] { 0, 1 }, v.InvalidColumns);   // NaN + out-of-range(>Max)
+            Assert.Equal(new[] { 0 }, v.NonFiniteColumns);
+            Assert.Equal(new[] { 1 }, v.OutOfRangeColumns);
+            Assert.Null(v.MaxTotalFeet);
             Assert.Equal(Min, v.NormalizedFeet[0], 6);
             Assert.Equal(Max, v.NormalizedFeet[1], 6);
-            Assert.False(string.IsNullOrEmpty(v.Reason));
+        }
+
+        [Fact]
+        public void ValidateAll_ReportsTypedReasonsAndSuppliedLimit()
+        {
+            var v = LayoutOps.ValidateAll(
+                new double[]
+                {
+                    double.NaN, double.NegativeInfinity,
+                    0.05, 2.5, 0.5
+                }, 2.5);
+
+            Assert.False(v.IsValid);
+            Assert.Equal(new[] { 0, 1 }, v.NonFiniteColumns);
+            Assert.Equal(new[] { 2, 3 }, v.OutOfRangeColumns);
+            Assert.Equal(new[] { 0, 1, 2, 3 }, v.InvalidColumns);
+            Assert.Equal(2.8, v.TotalFeet, 12);
+            Assert.True(v.ExceedsTotalLimit);
+            Assert.Equal(2.5, v.MaxTotalFeet.Value, 12);
+
+            var withoutLimit = LayoutOps.ValidateAll(
+                new double[] { 0.5, 0.5 }, null);
+            Assert.Null(withoutLimit.MaxTotalFeet);
+            Assert.Empty(withoutLimit.NonFiniteColumns);
+            Assert.Empty(withoutLimit.OutOfRangeColumns);
         }
 
         [Fact]
@@ -380,11 +477,153 @@ namespace ExcelScheduleLink.Excel.OpenXml.Tests
             var over = LayoutOps.ValidateAll(new double[] { 1.0, 1.0, 1.0 }, 2.5);
             Assert.False(over.IsValid);
             Assert.True(over.ExceedsTotalLimit);
+            Assert.Equal(2.5, over.MaxTotalFeet.Value, 12);
             Assert.Equal(3.0, over.TotalFeet, 6);
 
             var ok = LayoutOps.ValidateAll(new double[] { 0.5, 0.5 }, 5.0);
             Assert.True(ok.IsValid);
             Assert.False(ok.ExceedsTotalLimit);
+            Assert.Equal(5.0, ok.MaxTotalFeet.Value, 12);
+            Assert.Empty(ok.NonFiniteColumns);
+            Assert.Empty(ok.OutOfRangeColumns);
+        }
+
+        [Fact]
+        public void ValidateAll_WithCurrent_PreservesNativeWidthsOutsideBounds()
+        {
+            double[] current = { 0.05, 0.75, 2.5 };
+            double[] candidate = { 0.05, 0.75 + 0.5 * Tol, 2.5 };
+
+            var result = LayoutOps.ValidateAll(candidate, null, current);
+
+            Assert.True(result.IsValid);
+            Assert.Equal(current, result.NormalizedFeet);
+            Assert.Equal(0.05, result.NormalizedFeet[0], 12);
+            Assert.Equal(0.75, result.NormalizedFeet[1], 12);
+            Assert.Equal(2.5, result.NormalizedFeet[2], 12);
+            Assert.Empty(result.InvalidColumns);
+            Assert.Empty(result.NonFiniteColumns);
+            Assert.Empty(result.OutOfRangeColumns);
+        }
+
+        [Fact]
+        public void ValidateAll_WithCurrent_UsesInclusiveTolerance()
+        {
+            double[] atBoundary = { 2.0 * Tol };
+            double[] live = { Tol };
+            var preserved = LayoutOps.ValidateAll(atBoundary, null, live);
+
+            Assert.True(preserved.IsValid);
+            Assert.Equal(Tol, preserved.NormalizedFeet[0], 12);
+
+            var outside = LayoutOps.ValidateAll(
+                new double[] { 3.0 * Tol }, null, live);
+
+            Assert.False(outside.IsValid);
+            Assert.Equal(new[] { 0 }, outside.InvalidColumns);
+            Assert.Equal(Min, outside.NormalizedFeet[0], 12);
+        }
+
+        [Fact]
+        public void ValidateAll_WithCurrent_ChangedWidthsKeepExistingValidation()
+        {
+            var changed = LayoutOps.ValidateAll(
+                new double[] { 0.06, 2.4 }, null,
+                new double[] { 0.05, 2.5 });
+
+            Assert.False(changed.IsValid);
+            Assert.Equal(new[] { 0, 1 }, changed.InvalidColumns);
+            Assert.Empty(changed.NonFiniteColumns);
+            Assert.Equal(new[] { 0, 1 }, changed.OutOfRangeColumns);
+
+            var legal = LayoutOps.ValidateAll(
+                new double[] { Min, Max }, null,
+                new double[] { 0.05, 2.5 });
+            Assert.True(legal.IsValid);
+            Assert.Equal(Min, legal.NormalizedFeet[0], 12);
+            Assert.Equal(Max, legal.NormalizedFeet[1], 12);
+            Assert.Empty(legal.NonFiniteColumns);
+            Assert.Empty(legal.OutOfRangeColumns);
+
+            var nearBoundary = LayoutOps.ValidateAll(
+                new double[] { Min - 0.5 * Tol, Max + 0.5 * Tol }, null,
+                new double[] { 0.5, 0.5 });
+            Assert.True(nearBoundary.IsValid);
+            Assert.Equal(Min, nearBoundary.NormalizedFeet[0], 12);
+            Assert.Equal(Max, nearBoundary.NormalizedFeet[1], 12);
+            Assert.Empty(nearBoundary.NonFiniteColumns);
+            Assert.Empty(nearBoundary.OutOfRangeColumns);
+
+            var nonPositive = LayoutOps.ValidateAll(
+                new double[] { 0.0, -1.0, double.NaN, double.PositiveInfinity },
+                null,
+                new double[] { 0.5, 0.5, 0.5, 0.5 });
+            Assert.False(nonPositive.IsValid);
+            Assert.Equal(new[] { 0, 1, 2, 3 }, nonPositive.InvalidColumns);
+            Assert.Equal(new[] { 2, 3 }, nonPositive.NonFiniteColumns);
+            Assert.Equal(new[] { 0, 1 }, nonPositive.OutOfRangeColumns);
+        }
+
+        [Fact]
+        public void ValidateAll_WithCurrent_TotalLimitUsesPreservedValues()
+        {
+            double[] current = { 0.05, 2.5 };
+            var over = LayoutOps.ValidateAll(
+                new double[] { 0.05, 2.5 }, 2.4, current);
+
+            Assert.False(over.IsValid);
+            Assert.True(over.ExceedsTotalLimit);
+            Assert.Equal(2.55, over.TotalFeet, 12);
+            Assert.Equal(current, over.NormalizedFeet);
+
+            var allowed = LayoutOps.ValidateAll(
+                new double[] { 0.05, 2.5 }, 3.0, current);
+            Assert.True(allowed.IsValid);
+            Assert.Equal(2.55, allowed.TotalFeet, 12);
+            Assert.Empty(allowed.NonFiniteColumns);
+            Assert.Empty(allowed.OutOfRangeColumns);
+        }
+
+        [Fact]
+        public void ValidateAll_WithCurrent_RejectsInvalidBaseline()
+        {
+            Assert.Throws<ArgumentException>(() => LayoutOps.ValidateAll(
+                new double[] { 0.5 }, null, new double[0]));
+            Assert.Throws<ArgumentException>(() => LayoutOps.ValidateAll(
+                new double[] { 0.5 }, null, new double[] { 0.0 }));
+            Assert.Throws<ArgumentException>(() => LayoutOps.ValidateAll(
+                new double[] { 0.5 }, null, new double[] { double.NaN }));
+            Assert.Throws<ArgumentException>(() => LayoutOps.ValidateAll(
+                new double[] { 0.5 }, null, new double[] { double.PositiveInfinity }));
+            Assert.Throws<ArgumentException>(() => LayoutOps.ValidateAll(
+                new double[] { 0.5, 0.5 }, null,
+                new double[] { double.MaxValue, double.MaxValue }));
+
+            var empty = LayoutOps.ValidateAll(
+                new double[0], null, new double[0]);
+            Assert.True(empty.IsValid);
+            Assert.Empty(empty.NormalizedFeet);
+
+            var withoutBaseline = LayoutOps.ValidateAll(
+                new double[] { 0.5 }, null, (IList<double>)null);
+            Assert.True(withoutBaseline.IsValid);
+        }
+
+        [Fact]
+        public void ValidateAll_WithCurrent_DoesNotMutateInputs()
+        {
+            double[] candidate = { 0.05, 0.8, 2.5 };
+            double[] current = { 0.05, 0.7, 2.5 };
+            double[] candidateBefore = (double[])candidate.Clone();
+            double[] currentBefore = (double[])current.Clone();
+
+            var result = LayoutOps.ValidateAll(candidate, null, current);
+
+            Assert.NotSame(candidate, result.NormalizedFeet);
+            Assert.NotSame(current, result.NormalizedFeet);
+            Assert.Equal(candidateBefore, candidate);
+            Assert.Equal(currentBefore, current);
+            Assert.Equal(new double[] { 0.05, 0.8, 2.5 }, result.NormalizedFeet);
         }
 
         // ---------------- Randomized property test (fixed seed) ----------------

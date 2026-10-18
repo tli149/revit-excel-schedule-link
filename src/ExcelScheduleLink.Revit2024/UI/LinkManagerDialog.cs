@@ -1,12 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Globalization;
 using System.Windows.Forms;
 using ExcelScheduleLink.Contracts;
 using ExcelScheduleLink.Revit2024.Link;
 // Alias the few Revit types so WinForms / Drawing types win for Form / Color /
-// View / ComboBox (Autodesk.Revit.DB and Autodesk.Revit.UI define same-named types).
+// View (Autodesk.Revit.DB and Autodesk.Revit.UI define same-named types).
 using Document = Autodesk.Revit.DB.Document;
 using ElementId = Autodesk.Revit.DB.ElementId;
 using ViewSchedule = Autodesk.Revit.DB.ViewSchedule;
@@ -16,9 +15,7 @@ namespace ExcelScheduleLink.Revit2024.UI
 {
     /// <summary>
     /// Link Manager: lists all Excel-linked schedules, shows source path and
-    /// missing-source status, lets the user edit per-link settings
-    /// (column-width mode, row-height mode, width scale) which persist for the
-    /// next reload, and reloads the selected link or all links.
+    /// missing-source status, and reloads the selected link or all links.
     ///
     /// Modal dialog: it runs inside the command's API context, so it calls the
     /// services (which open transactions) directly on the main thread. Built
@@ -29,27 +26,19 @@ namespace ExcelScheduleLink.Revit2024.UI
     {
         private readonly Document _doc;
         private readonly ListView _list;
-        private readonly NumericUpDown _widthScale;
-        private readonly ComboBox _colMode;
-        private readonly ComboBox _rowMode;
-        private readonly Button _apply;
         private readonly Button _reloadSelected;
         private readonly Button _reloadAll;
         private readonly Button _checkAndRepair;
         private readonly Button _close;
         private readonly ToolTip _reloadSelectedToolTip = new ToolTip();
-        private readonly GroupBox _settingsGroup;
         private readonly Label _emptyHint;
 
         private List<LinkRow> _rows = new List<LinkRow>();
         private readonly UiSettings _settings;
         private bool _userAdjustedColumns;
         private bool _stretching;
-        private bool _loadingEditor;
         private bool _handlingSelection;
-        private bool _settingsDirty;
         private bool _fatalRegenerationFailure;
-        private ElementId _editorScheduleId;
 
         public LinkManagerDialog(Document doc)
         {
@@ -80,16 +69,14 @@ namespace ExcelScheduleLink.Revit2024.UI
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 4,
+                RowCount = 3,
                 Padding = new Padding(12)
             };
-            // Constrain the single column to the form width; without this the
-            // column auto-sizes to its widest child (the settings grid) and the
-            // panel overflows past the right edge, clipping the rightmost button.
+            // Constrain the single column to the form width so the list and the
+            // button row stay inside the client area.
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f)); // list
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // empty hint
-            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // settings
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // buttons
 
             // ---- List ----
@@ -108,9 +95,6 @@ namespace ExcelScheduleLink.Revit2024.UI
             _list.Columns.Add(UserMessages.ManagerColSource, 280); // stretches to fill (see below)
             _list.Columns.Add(UserMessages.ManagerColStatus, 180);
             _list.Columns.Add(UserMessages.ManagerIntegrityColumn, 180);
-            _list.Columns.Add(UserMessages.ManagerColScale, 52);
-            _list.Columns.Add(UserMessages.ManagerColColMode, 115);
-            _list.Columns.Add(UserMessages.ManagerColRowMode, 115);
             _list.SelectedIndexChanged += (s, e) => OnSelectionChanged();
             // The Source column absorbs any extra width so long paths stay
             // visible — until the user adjusts columns manually, after which
@@ -147,89 +131,8 @@ namespace ExcelScheduleLink.Revit2024.UI
             };
             layout.Controls.Add(_emptyHint, 0, 1);
 
-            // ---- Settings group ----
-            _settingsGroup = new GroupBox
-            {
-                Text = UserMessages.ManagerSettingsGroup,
-                Dock = DockStyle.Fill,
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                Padding = new Padding(10)
-            };
-            // Clean 2-row, 4-column grid (no wrapping flow):
-            //   row0: [scale label][spinner]   [col-mode label][col-mode combo]
-            //   row1: [row-mode label][combo]                  [Apply, right]
-            TableLayoutPanel grid = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 4,
-                RowCount = 2,
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink
-            };
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-
-            grid.Controls.Add(MakeLabel(UserMessages.ManagerWidthScaleLabel), 0, 0);
-            FlowLayoutPanel scaleRow = new FlowLayoutPanel
-            {
-                AutoSize = true,
-                FlowDirection = FlowDirection.LeftToRight,
-                WrapContents = false,
-                Anchor = AnchorStyles.Left,
-                Margin = new Padding(0)
-            };
-            _widthScale = new NumericUpDown
-            {
-                DecimalPlaces = 2,
-                Increment = 0.1M,
-                Minimum = 0.2M,
-                Maximum = 10.0M,
-                Width = 80,
-                Value = 1.5M,
-                Margin = new Padding(3, 3, 6, 6)
-            };
-            _widthScale.ValueChanged += (s, e) => MarkSettingsDirty();
-            scaleRow.Controls.Add(_widthScale);
-            scaleRow.Controls.Add(new Label
-            {
-                Text = UserMessages.ManagerWidthScaleHint,
-                AutoSize = true,
-                ForeColor = SystemColors.GrayText,
-                Margin = new Padding(0, 8, 18, 0)
-            });
-            grid.Controls.Add(scaleRow, 1, 0);
-
-            grid.Controls.Add(MakeLabel(UserMessages.ManagerColModeLabel), 2, 0);
-            _colMode = MakeCombo(UserMessages.ColModeApplyExcel, UserMessages.ColModeKeepManual);
-            _colMode.SelectedIndexChanged += (s, e) => MarkSettingsDirty();
-            _colMode.Anchor = AnchorStyles.Left;
-            grid.Controls.Add(_colMode, 3, 0);
-
-            grid.Controls.Add(MakeLabel(UserMessages.ManagerRowModeLabel), 0, 1);
-            _rowMode = MakeCombo(UserMessages.RowModeApplyExcel, UserMessages.RowModeKeepManual);
-            _rowMode.SelectedIndexChanged += (s, e) => MarkSettingsDirty();
-            _rowMode.Anchor = AnchorStyles.Left;
-            grid.Controls.Add(_rowMode, 1, 1);
-            grid.SetColumnSpan(_rowMode, 2);
-
-            _apply = new Button
-            {
-                Text = UserMessages.ManagerApply,
-                AutoSize = true,
-                MinimumSize = new Size(110, 28),
-                Anchor = AnchorStyles.Right,
-                Margin = new Padding(18, 3, 3, 3)
-            };
-            _apply.Click += (s, e) => OnApply();
-            grid.Controls.Add(_apply, 3, 1);
-            _settingsGroup.Controls.Add(grid);
-            layout.Controls.Add(_settingsGroup, 0, 2);
-
             // ---- Buttons: explicit 5-column grid (spacer + 4 buttons) so all
-            // three are right-aligned and always visible (no Flow ambiguity). ----
+            // four are right-aligned and always visible (no Flow ambiguity). ----
             // AutoSize is OFF on purpose: it would collapse the Percent-100
             // spacer column and break the right-alignment.
             TableLayoutPanel buttons = new TableLayoutPanel
@@ -253,7 +156,7 @@ namespace ExcelScheduleLink.Revit2024.UI
                 MinimumSize = new Size(150, 28),
                 Margin = new Padding(6, 0, 0, 0)
             };
-            _checkAndRepair.Click += (s, e) => OnCheckAndRepair();
+            _checkAndRepair.Click += (s, e) => RunGuarded(OnCheckAndRepair);
             new ToolTip().SetToolTip(_checkAndRepair,
                 UserMessages.ManagerCheckAndRepairTooltip);
 
@@ -264,9 +167,9 @@ namespace ExcelScheduleLink.Revit2024.UI
                 MinimumSize = new Size(120, 28),
                 Margin = new Padding(6, 0, 0, 0)
             };
-            _reloadSelected.Click += (s, e) => OnReloadSelected();
+            _reloadSelected.Click += (s, e) => RunGuarded(OnReloadSelected);
             _reloadSelectedToolTip.SetToolTip(
-                _reloadSelected, UserMessages.ManagerReloadSavesPending);
+                _reloadSelected, UserMessages.ManagerReloadSelectedTooltip);
             _reloadAll = new Button
             {
                 Text = UserMessages.ManagerReloadAll,
@@ -274,7 +177,7 @@ namespace ExcelScheduleLink.Revit2024.UI
                 MinimumSize = new Size(110, 28),
                 Margin = new Padding(6, 0, 0, 0)
             };
-            _reloadAll.Click += (s, e) => OnReloadAll();
+            _reloadAll.Click += (s, e) => RunGuarded(OnReloadAll);
             _close = new Button
             {
                 Text = UserMessages.ManagerClose,
@@ -287,11 +190,10 @@ namespace ExcelScheduleLink.Revit2024.UI
             buttons.Controls.Add(_reloadSelected, 2, 0);
             buttons.Controls.Add(_reloadAll, 3, 0);
             buttons.Controls.Add(_close, 4, 0);
-            layout.Controls.Add(buttons, 0, 3);
+            layout.Controls.Add(buttons, 0, 2);
 
             Controls.Add(layout);
-            // Enter must not close the manager while the user is editing a
-            // spinner or combo. Escape/Close follows the unsaved-change prompt.
+            // Escape and the Close button use the dialog's normal close behavior.
             CancelButton = _close;
 
             RefreshList(null);
@@ -349,30 +251,6 @@ namespace ExcelScheduleLink.Revit2024.UI
             _settings.Save();
         }
 
-        private static Label MakeLabel(string text)
-        {
-            return new Label
-            {
-                Text = text,
-                AutoSize = true,
-                Anchor = AnchorStyles.Left,
-                Margin = new Padding(3, 7, 4, 0)
-            };
-        }
-
-        private static ComboBox MakeCombo(params string[] items)
-        {
-            ComboBox combo = new ComboBox
-            {
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Width = 170,
-                Margin = new Padding(3, 3, 16, 3)
-            };
-            combo.Items.AddRange(items);
-            combo.SelectedIndex = 0;
-            return combo;
-        }
-
         private void RefreshList(ElementId preferredId, bool rescanIntegrity = false)
         {
             if (_fatalRegenerationFailure)
@@ -401,9 +279,6 @@ namespace ExcelScheduleLink.Revit2024.UI
                         row.IntegrityResult == null
                             ? StyleIntegrityState.Indeterminate
                             : row.IntegrityResult.State));
-                    item.SubItems.Add(row.WidthScale.ToString("0.00", CultureInfo.InvariantCulture));
-                    item.SubItems.Add(ColModeText(row.ColumnWidthMode));
-                    item.SubItems.Add(RowModeText(row.RowHeightMode));
                     if (row.IntegrityResult != null
                         && row.IntegrityResult.State == StyleIntegrityState.Affected)
                     {
@@ -440,7 +315,7 @@ namespace ExcelScheduleLink.Revit2024.UI
             }
 
             _emptyHint.Visible = _rows.Count == 0;
-            LoadSelectedEditor();
+            UpdateSelectionEnabled();
         }
 
         private void OnSelectionChanged()
@@ -453,199 +328,28 @@ namespace ExcelScheduleLink.Revit2024.UI
             {
                 return;
             }
-
-            int idx = SelectedIndex();
-            // ListView raises a transient no-selection event while moving from
-            // one row to another. Wait for the following selected-row event.
-            if (idx < 0)
-            {
-                return;
-            }
-
-            ElementId nextId = _rows[idx].ScheduleId;
-            if (_settingsDirty && _editorScheduleId != null && nextId != _editorScheduleId)
-            {
-                DialogResult answer = MessageBox.Show(
-                    this,
-                    UserMessages.ManagerSaveBeforeSelection,
-                    UserMessages.ManagerTitle,
-                    MessageBoxButtons.YesNoCancel,
-                    MessageBoxIcon.Question);
-                if (answer == DialogResult.Cancel)
-                {
-                    RestoreEditorSelection();
-                    return;
-                }
-                if (answer == DialogResult.Yes && !SaveEditorSettings())
-                {
-                    RestoreEditorSelection();
-                    return;
-                }
-                if (answer == DialogResult.No)
-                {
-                    _settingsDirty = false;
-                }
-            }
-
-            LoadSelectedEditor();
+            UpdateSelectionEnabled();
         }
 
-        private void LoadSelectedEditor()
+        private ElementId SelectedScheduleId()
         {
             int idx = SelectedIndex();
-            _loadingEditor = true;
-            try
-            {
-                if (idx < 0)
-                {
-                    _editorScheduleId = null;
-                    _settingsDirty = false;
-                    _reloadSelectedToolTip.SetToolTip(
-                        _reloadSelected, UserMessages.ManagerReloadSavesPending);
-                    return;
-                }
-
-                LinkRow row = _rows[idx];
-                _editorScheduleId = row.ScheduleId;
-                _reloadSelectedToolTip.SetToolTip(
-                    _reloadSelected,
-                    row.IntegrityResult != null
-                        && row.IntegrityResult.State == StyleIntegrityState.Affected
-                        ? UserMessages.ManagerReloadSelectedRepairTooltip
-                        : UserMessages.ManagerReloadSavesPending);
-                _widthScale.Value = ClampScale(row.WidthScale);
-                _colMode.SelectedIndex =
-                    row.ColumnWidthMode == ColumnWidthMode.KeepManualWidths ? 1 : 0;
-                _rowMode.SelectedIndex =
-                    row.RowHeightMode == RowHeightMode.KeepManualHeights ? 1 : 0;
-                _settingsDirty = false;
-            }
-            finally
-            {
-                _loadingEditor = false;
-                UpdateEditorEnabled();
-            }
+            return idx >= 0 && idx < _rows.Count ? _rows[idx].ScheduleId : null;
         }
 
-        private void MarkSettingsDirty()
+        private void UpdateSelectionEnabled()
         {
-            if (_loadingEditor || _editorScheduleId == null)
-            {
-                return;
-            }
-            _settingsDirty = true;
-            UpdateEditorEnabled();
-        }
-
-        private void UpdateEditorEnabled()
-        {
-            bool enabled = _editorScheduleId != null;
-            _widthScale.Enabled = enabled;
-            _colMode.Enabled = enabled;
-            _rowMode.Enabled = enabled;
-            _apply.Enabled = enabled && _settingsDirty;
-            _reloadSelected.Enabled = enabled;
+            ElementId selectedId = SelectedScheduleId();
+            _reloadSelected.Enabled = selectedId != null;
             _reloadAll.Enabled = _rows.Count > 0;
             _checkAndRepair.Enabled = _rows.Count > 0;
-            _settingsGroup.Text = _settingsDirty
-                ? UserMessages.ManagerSettingsChangedGroup
-                : UserMessages.ManagerSettingsGroup;
-        }
-
-        private bool SaveEditorSettings(
-            bool forReloadAll = false, bool fromFormClosing = false)
-        {
-            if (_fatalRegenerationFailure)
-            {
-                return false;
-            }
-            if (_editorScheduleId == null)
-            {
-                TaskDialog.Show(UserMessages.ManagerTitle, UserMessages.ManagerSelectFirst);
-                return false;
-            }
-
-            ColumnWidthMode colMode = _colMode.SelectedIndex == 1
-                ? ColumnWidthMode.KeepManualWidths : ColumnWidthMode.ApplyExcelWidths;
-            RowHeightMode rowMode = _rowMode.SelectedIndex == 1
-                ? RowHeightMode.KeepManualHeights : RowHeightMode.ApplyExcelHeights;
-            ViewSchedule schedule = _doc.GetElement(_editorScheduleId) as ViewSchedule;
-            if (schedule == null)
-            {
-                TaskDialog.Show(UserMessages.ManagerTitle, UserMessages.ManagerLinkNoLongerAvailable);
-                return false;
-            }
-            ExcelLinkStorage storage = ExcelLinkSchema.LoadAny(schedule);
-            if (storage == null || storage.Info == null)
-            {
-                TaskDialog.Show(UserMessages.ManagerTitle, UserMessages.ManagerLinkNoLongerAvailable);
-                return false;
-            }
-            if (!storage.IsV2)
-            {
-                if (!ReloadDialogs.ConfirmLegacyMigration(_doc, schedule.Name))
-                {
-                    return false;
-                }
-            }
-            else
-            {
-                WorksharingAdvisory.ShowIfNeeded(_doc);
-            }
-            SettingsSaveOutcome saveOutcome = LinkManagerService.SaveSettings(
-                _doc, _editorScheduleId, colMode, rowMode, (double)_widthScale.Value, true);
-            if (saveOutcome == null || !saveOutcome.Success)
-            {
-                if (saveOutcome != null && saveOutcome.FatalRegenerationFailure)
-                {
-                    StopAfterFatalRegenerationFailure(
-                        saveOutcome.Detail, !fromFormClosing);
-                    return false;
-                }
-                TaskDialog.Show(UserMessages.ManagerTitle, forReloadAll
-                    ? UserMessages.ManagerReloadAllSettingsSaveFailed(
-                        saveOutcome != null && saveOutcome.RollbackVerified,
-                        saveOutcome != null && saveOutcome.TransactionStarted)
-                    : UserMessages.ManagerSettingsSaveFailed(
-                        saveOutcome != null && saveOutcome.RollbackVerified,
-                        saveOutcome != null && saveOutcome.TransactionStarted));
-                return false;
-            }
-
-            int idx = FindRowIndex(_editorScheduleId);
-            if (idx >= 0)
-            {
-                LinkRow row = _rows[idx];
-                row.WidthScale = (double)_widthScale.Value;
-                row.ColumnWidthMode = colMode;
-                row.RowHeightMode = rowMode;
-                _list.Items[idx].SubItems[5].Text =
-                    row.IntegrityResult == null
-                        ? string.Empty
-                        : StyleIntegrityDisplay.For(row.IntegrityResult.State);
-                _list.Items[idx].SubItems[6].Text =
-                    row.WidthScale.ToString("0.00", CultureInfo.InvariantCulture);
-                _list.Items[idx].SubItems[7].Text = ColModeText(colMode);
-                _list.Items[idx].SubItems[8].Text = RowModeText(rowMode);
-            }
-            _settingsDirty = false;
-            UpdateEditorEnabled();
-            return true;
-        }
-
-        private void OnApply()
-        {
-            if (_fatalRegenerationFailure)
-            {
-                return;
-            }
-            ElementId id = _editorScheduleId;
-            if (!SaveEditorSettings())
-            {
-                return;
-            }
-            RefreshList(id);
-            TaskDialog.Show(UserMessages.ManagerTitle, UserMessages.ManagerSettingsSaved);
+            StyleIntegrityResult integrity = selectedId == null
+                ? null : LinkManagerService.GetIntegrity(_rows, selectedId);
+            _reloadSelectedToolTip.SetToolTip(
+                _reloadSelected,
+                integrity != null && integrity.State == StyleIntegrityState.Affected
+                    ? UserMessages.ManagerReloadSelectedRepairTooltip
+                    : UserMessages.ManagerReloadSelectedTooltip);
         }
 
         private void OnReloadSelected()
@@ -654,7 +358,7 @@ namespace ExcelScheduleLink.Revit2024.UI
             {
                 return;
             }
-            ElementId id = _editorScheduleId;
+            ElementId id = SelectedScheduleId();
             if (id == null)
             {
                 TaskDialog.Show(UserMessages.ManagerTitle, UserMessages.ManagerSelectFirst);
@@ -668,19 +372,9 @@ namespace ExcelScheduleLink.Revit2024.UI
                 return;
             }
 
-            PendingLinkSettings pending = _settingsDirty
-                ? new PendingLinkSettings
-                {
-                    ColumnWidthMode = _colMode.SelectedIndex == 1
-                        ? ColumnWidthMode.KeepManualWidths : ColumnWidthMode.ApplyExcelWidths,
-                    RowHeightMode = _rowMode.SelectedIndex == 1
-                        ? RowHeightMode.KeepManualHeights : RowHeightMode.ApplyExcelHeights,
-                    WidthScale = (double)_widthScale.Value
-                }
-                : null;
             StyleIntegrityResult prior = LinkManagerService.GetIntegrity(_rows, id);
             TargetedReloadFlowResult flow = TargetedReloadFlow.Run(
-                _doc, schedule, ReloadScope.SingleLink, pending, prior);
+                _doc, schedule, ReloadScope.SingleLink, prior);
             ReloadOutcome outcome = flow.Reload;
             if (flow.FatalRegeneration)
             {
@@ -690,7 +384,6 @@ namespace ExcelScheduleLink.Revit2024.UI
             }
             bool fallbackSucceeded = flow.Fallback != null
                 && flow.Fallback.Success;
-            StyleIntegrityResult after = flow.After;
             bool postRepairFailed = flow.MutationSucceeded && !flow.FinalHealthy;
             if (postRepairFailed)
             {
@@ -701,23 +394,14 @@ namespace ExcelScheduleLink.Revit2024.UI
             {
                 if (!fallbackSucceeded)
                 {
-                    ShowReloadOutcome(outcome);
+                    TargetedReloadFlow.ShowReloadOutcome(
+                        flow, UserMessages.ManagerTitle);
                 }
             }
-            if (outcome.IsSuccess && !postRepairFailed)
-            {
-                _settingsDirty = false;
-                RefreshList(id, false);
-            }
-            else if (pending == null && outcome.Kind != ReloadResultKind.Cancelled
+            if (outcome.Kind != ReloadResultKind.Cancelled
                 && outcome.Kind != ReloadResultKind.NetworkAccessCancelled)
             {
                 RefreshList(id, false);
-            }
-            else if (pending != null && outcome.Kind != ReloadResultKind.Cancelled
-                && outcome.Kind != ReloadResultKind.NetworkAccessCancelled)
-            {
-                UpdateIntegrityRow(id, after);
             }
         }
 
@@ -727,7 +411,7 @@ namespace ExcelScheduleLink.Revit2024.UI
             {
                 return;
             }
-            ElementId selected = _editorScheduleId;
+            ElementId selected = SelectedScheduleId();
             CheckAndRepairOutcome outcome =
                 ScheduleRepairCoordinator.CheckAndRepair(_doc);
             if (outcome != null && outcome.FatalRegenerationFailure)
@@ -747,29 +431,7 @@ namespace ExcelScheduleLink.Revit2024.UI
             {
                 return;
             }
-            ElementId selectedId = _editorScheduleId;
-            if (_settingsDirty)
-            {
-                DialogResult answer = MessageBox.Show(
-                    this,
-                    UserMessages.ManagerSaveBeforeReloadAll,
-                    UserMessages.ManagerTitle,
-                    MessageBoxButtons.YesNoCancel,
-                    MessageBoxIcon.Question);
-                if (answer == DialogResult.Cancel)
-                {
-                    return;
-                }
-                if (answer == DialogResult.Yes && !SaveEditorSettings(true))
-                {
-                    return;
-                }
-                if (answer == DialogResult.No)
-                {
-                    _settingsDirty = false;
-                    UpdateEditorEnabled();
-                }
-            }
+            ElementId selectedId = SelectedScheduleId();
 
             ReloadAllFlowResult reloadAll = ReloadAllFlow.Run(
                 _doc, new List<LinkRow>(_rows));
@@ -787,19 +449,6 @@ namespace ExcelScheduleLink.Revit2024.UI
                     reloadAll.TruncatedSchedules, reloadAll.Details));
         }
 
-        private static void ShowReloadOutcome(ReloadOutcome outcome)
-        {
-            if (outcome == null)
-            {
-                return;
-            }
-            string message = UserMessages.ReloadOutcomeMessage(outcome);
-            if (!string.IsNullOrEmpty(message))
-            {
-                TaskDialog.Show(UserMessages.ManagerTitle, message);
-            }
-        }
-
         private void OnManagerClosing(object sender, FormClosingEventArgs e)
         {
             if (_fatalRegenerationFailure)
@@ -807,79 +456,41 @@ namespace ExcelScheduleLink.Revit2024.UI
                 e.Cancel = false;
                 return;
             }
-            if (_settingsDirty)
-            {
-                DialogResult answer = MessageBox.Show(
-                    this,
-                    UserMessages.ManagerSaveBeforeClose,
-                    UserMessages.ManagerTitle,
-                    MessageBoxButtons.YesNoCancel,
-                    MessageBoxIcon.Question);
-                if (answer == DialogResult.Cancel)
-                {
-                    e.Cancel = true;
-                    return;
-                }
-                if (answer == DialogResult.Yes)
-                {
-                    bool saved = SaveEditorSettings(
-                        false, true);
-                    if (_fatalRegenerationFailure)
-                    {
-                        e.Cancel = false;
-                        return;
-                    }
-                    if (!saved)
-                    {
-                        e.Cancel = true;
-                        return;
-                    }
-                }
-            }
             SaveUiSettings();
+        }
+
+        private void RunGuarded(Action handler)
+        {
+            FatalRegenerationBoundary.Guard(handler, delegate
+            {
+                // A status-path stop may already have warned; never warn twice.
+                StopAfterFatalRegenerationFailure(_fatalRegenerationFailure
+                    ? null : UserMessages.RegenerationFailure);
+            });
         }
 
         private void StopAfterFatalRegenerationFailure(
             string detail, bool close = true)
         {
             _fatalRegenerationFailure = true;
-            if (!string.IsNullOrEmpty(detail))
+            try
             {
-                TaskDialog.Show(UserMessages.ManagerTitle, detail);
+                if (!string.IsNullOrEmpty(detail))
+                {
+                    TaskDialog.Show(UserMessages.ManagerTitle, detail);
+                }
             }
-            if (close)
+            catch (Exception)
             {
-                Close();
+                // The dialog is already terminal: a failed notification must
+                // neither keep it open nor start another warning.
             }
-        }
-
-        private void UpdateIntegrityRow(ElementId id, StyleIntegrityResult result)
-        {
-            int index = FindRowIndex(id);
-            if (index < 0)
+            finally
             {
-                return;
-            }
-            LinkRow row = _rows[index];
-            row.IntegrityResult = result;
-            ListViewItem item = _list.Items[index];
-            item.SubItems[5].Text = StyleIntegrityDisplay.For(
-                result == null ? StyleIntegrityState.Indeterminate : result.State);
-            if (result != null && result.State == StyleIntegrityState.Affected)
-            {
-                item.ForeColor = Color.Firebrick;
-            }
-            else if (result == null || result.State == StyleIntegrityState.Indeterminate)
-            {
-                item.ForeColor = Color.DarkOrange;
-            }
-            else if (!row.SourceFound)
-            {
-                item.ForeColor = Color.Firebrick;
-            }
-            else
-            {
-                item.ForeColor = _list.ForeColor;
+                if (close)
+                {
+                    Close();
+                }
             }
         }
 
@@ -904,47 +515,5 @@ namespace ExcelScheduleLink.Revit2024.UI
             return -1;
         }
 
-        private void RestoreEditorSelection()
-        {
-            int idx = FindRowIndex(_editorScheduleId);
-            if (idx < 0)
-            {
-                return;
-            }
-            _handlingSelection = true;
-            try
-            {
-                foreach (ListViewItem item in _list.Items)
-                {
-                    item.Selected = false;
-                }
-                _list.Items[idx].Selected = true;
-                _list.Items[idx].Focused = true;
-                _list.Items[idx].EnsureVisible();
-            }
-            finally
-            {
-                _handlingSelection = false;
-            }
-        }
-
-        private static string ColModeText(ColumnWidthMode mode)
-        {
-            return mode == ColumnWidthMode.KeepManualWidths
-                ? UserMessages.ColModeKeepManual : UserMessages.ColModeApplyExcel;
-        }
-
-        private static string RowModeText(RowHeightMode mode)
-        {
-            return mode == RowHeightMode.KeepManualHeights
-                ? UserMessages.RowModeKeepManual : UserMessages.RowModeApplyExcel;
-        }
-
-        private static decimal ClampScale(double value)
-        {
-            if (double.IsNaN(value) || value < 0.2) return 1.0M;
-            if (value > 10.0) return 10.0M;
-            return (decimal)value;
-        }
     }
 }

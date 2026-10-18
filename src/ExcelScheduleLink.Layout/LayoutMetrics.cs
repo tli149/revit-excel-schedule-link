@@ -25,10 +25,14 @@ namespace ExcelScheduleLink.Layout
         // letter / digit / symbol) is HalfWidthUnits, a full-width glyph (CJK
         // ideograph, kana, Hangul, full-width form) is FullWidthUnits, and a
         // space is SpaceUnits. HalfWidthInchesPerUnit converts units to paper
-        // inches. CellPaddingInches is added once per column.
+        // inches. CellPaddingInches is total horizontal padding: the width
+        // model adds it once per column, while row fitting adds it once per
+        // anchor.
         // 0.09 in = one half-width glyph (so a full-width CJK glyph = 0.18 in).
         // This matches the pre-0.7.0 per-character width for ASCII while giving
         // CJK text twice the room it used to get. Calibrated on-device.
+        // The three glyph widths must stay multiples of 0.5: fit-content line
+        // histograms store exact half units and reject any other value.
         public const double HalfWidthInchesPerUnit = 0.09;
         public const double FullWidthUnits = 2.0;
         public const double HalfWidthUnits = 1.0;
@@ -39,6 +43,23 @@ namespace ExcelScheduleLink.Layout
         // produce an unreadable extreme column width.
         public const double MaxContentUnits = 60.0;
 
+        // ---- fit-content protection and line estimation ----
+        public const int FitContentHeadingRowCount = 1;
+        public const int FitContentProtectionPercent = 75;
+        public const int FitContentProtectionMinSamples = 2;
+        public const int FitContentProtectionMaxCharacters = 64;
+        public const int FitContentCodeMaxCharacters = 32;
+        public const int ColumnHeadingMaxLength = 32;
+        public const double FitContentMinCapacityUnits = 0.5;
+        public const double FitContentLineToleranceUnits = 1e-9;
+
+        // ---- fit-content allocation ----
+        public const int FitContentMaxTransferTrials = 2048;
+        public const int FitContentCoarseDivisor = 64;
+        public const int FitContentMediumDivisor = 256;
+        public const int FitContentFineDivisor = 1024;
+        public const double FitContentObjectiveTolerance = 1e-9;
+
         // ---- column width: Excel-width component (pixel approximation) ----
         // The conventional pixel approximation of an Excel width unit at 96 DPI
         // is pixels = width * 7 + 5.
@@ -47,26 +68,27 @@ namespace ExcelScheduleLink.Layout
         public const double PixelsPerInch = 96.0;
 
         // ---- column width: clamp (feet) ----
-        // Lower bound keeps a column from collapsing; upper bound stays safely
-        // within Revit's per-column limit so "Column Width Too Large" never
-        // appears. Both clamps are always enforced.
+        // Lower bound keeps a calculated column from collapsing; upper bound
+        // stays safely within Revit's per-column limit. A preserved live width
+        // may remain outside these bounds when the candidate is unchanged.
         public const double MinColumnFeet = 0.10; // ~1.2 inch
         public const double MaxColumnFeet = 2.0;  // ~24 inch
 
         // ---- body (schedule-view) width ----
-        // Method B keeps one dummy body column. The schedule VIEW lays the
-        // header table out inside that column's width, so the body column is
-        // widened to the rendered table total. A small margin is added because
-        // the two error directions are not symmetric: slightly too wide only
-        // leaves a sliver of empty space, while slightly too narrow makes one
-        // header column absorb the whole deficit and collapse to a single
-        // character. Set to 0 if on-device review shows the exact total is
-        // enough.
-        public const double BodyWidthMarginInches = 0.06;
+        // Revit 2024 stretches header columns when GridColumnWidth is set.
+        // Sync to the exact header total: positive padding causes cumulative growth.
+        // Keep zero shared with the raw diagnostic probe; do not add a visual margin.
+        public const double BodyWidthMarginInches = 0.0;
 
         // ---- row height ----
-        // Comfortable uniform row height applied on an initial render so rows
-        // are not crammed at Revit's minimum height.
+        // Estimated one-line minimum for fitted dimensions; this constant does
+        // not apply a height during rendering.
         public const double DefaultRowInches = 0.25;
+        // Provisional physical row-fitting calibration values.
+        public const double RowFitHalfUnitEm = 0.60;
+        public const double RowFitLinePitchFactor = 1.35;
+        // Total top and bottom padding.
+        public const double RowFitVerticalPaddingInches = 0.04;
+        public const int RowFitWrappedLineAllowance = 1;
     }
 }

@@ -12,8 +12,8 @@ body:
     id: version
     attributes:
       label: Add-in version
-      description: For example, 0.9.4.
-      placeholder: 0.9.4
+      description: For example, 0.10.0.
+      placeholder: 0.10.0
     validations:
       required: true
   - type: textarea

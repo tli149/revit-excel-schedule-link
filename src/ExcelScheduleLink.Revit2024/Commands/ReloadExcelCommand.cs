@@ -17,6 +17,12 @@ namespace ExcelScheduleLink.Revit2024.Commands
     {
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
+            return FatalRegenerationBoundary.RunCommand(ref message,
+                delegate { return Run(commandData); });
+        }
+
+        private static Result Run(ExternalCommandData commandData)
+        {
             UIApplication uiapp = commandData.Application;
             UIDocument uidoc = uiapp.ActiveUIDocument;
             if (uidoc == null)
@@ -35,19 +41,16 @@ namespace ExcelScheduleLink.Revit2024.Commands
             StyleIntegrityResult preReloadIntegrityHint =
                 ScheduleIntegritySessionCache.GetResult(uidoc.Document, schedule.Id);
             TargetedReloadFlowResult flow = TargetedReloadFlow.Run(
-                uidoc.Document, schedule, ReloadScope.SingleLink, null,
+                uidoc.Document, schedule, ReloadScope.SingleLink,
                 preReloadIntegrityHint);
             if (flow.FatalRegeneration)
             {
                 if (flow.Reload.IsFatalRegenerationFailure)
                 {
                     TaskDialog.Show(UserMessages.DialogTitle, flow.Reload.Detail);
-                    message = flow.Reload.Detail;
                 }
-                else if (flow.Fallback != null)
-                {
-                    message = flow.Fallback.Detail;
-                }
+                // A fatal in the fallback was already shown by
+                // ScheduleRepairCoordinator.TryFallback.
                 return Result.Failed;
             }
             ReloadOutcome outcome = flow.Reload;
@@ -57,7 +60,6 @@ namespace ExcelScheduleLink.Revit2024.Commands
             {
                 TaskDialog.Show(UserMessages.DialogTitle,
                     UserMessages.FallbackPostRepairFailed);
-                message = UserMessages.FallbackPostRepairFailed;
                 return Result.Failed;
             }
 
@@ -69,30 +71,26 @@ namespace ExcelScheduleLink.Revit2024.Commands
             switch (outcome.Kind)
             {
                 case ReloadResultKind.Success:
-                    TaskDialog.Show(UserMessages.DialogTitle,
-                        UserMessages.ReloadOutcomeMessage(outcome));
+                    TargetedReloadFlow.ShowReloadOutcome(
+                        flow, UserMessages.DialogTitle);
                     return Result.Succeeded;
 
                 case ReloadResultKind.SourceMissing:
                 case ReloadResultKind.NetworkAccessCancelled:
                 case ReloadResultKind.ReadFailed:
-                    TaskDialog.Show(UserMessages.DialogTitle,
-                        UserMessages.ReloadOutcomeMessage(outcome));
-                    return Result.Cancelled; // nothing changed
+                    TargetedReloadFlow.ShowReloadOutcome(
+                        flow, UserMessages.DialogTitle);
+                    return Result.Cancelled; // nothing changed, or TryFallback reported
 
                 case ReloadResultKind.ConfirmationRequired:
                 case ReloadResultKind.Cancelled:
-                    if (outcome.Kind == ReloadResultKind.ConfirmationRequired)
-                    {
-                        TaskDialog.Show(UserMessages.DialogTitle,
-                            UserMessages.ReloadOutcomeMessage(outcome));
-                    }
+                    TargetedReloadFlow.ShowReloadOutcome(
+                        flow, UserMessages.DialogTitle);
                     return Result.Cancelled; // no bulk or canceled mutation
 
                 case ReloadResultKind.RenderFailed:
-                    TaskDialog.Show(UserMessages.DialogTitle,
-                        UserMessages.ReloadOutcomeMessage(outcome));
-                    message = outcome.Detail;
+                    TargetedReloadFlow.ShowReloadOutcome(
+                        flow, UserMessages.DialogTitle);
                     return Result.Failed;
 
                 default:

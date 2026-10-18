@@ -27,6 +27,12 @@ namespace ExcelScheduleLink.Revit2024.Commands
     {
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
+            return FatalRegenerationBoundary.RunCommand(ref message,
+                delegate { return Run(commandData); });
+        }
+
+        private static Result Run(ExternalCommandData commandData)
+        {
             UIApplication uiapp = commandData.Application;
             UIDocument uidoc = uiapp.ActiveUIDocument;
             if (uidoc == null)
@@ -73,7 +79,6 @@ namespace ExcelScheduleLink.Revit2024.Commands
             // ---- 2. Worksheet / range selection, then read (no Transaction yet) ----
             string sheetName;
             string rangeAddress;
-            double widthScale;
             SheetModel sheet;
             SourceFingerprint sourceFingerprint;
             try
@@ -84,7 +89,6 @@ namespace ExcelScheduleLink.Revit2024.Commands
                     new LinkExcelDialog(
                         xlsxPath,
                         sheetNames,
-                        uiSettings.GetDouble("LinkWidthScale", ExcelLinkInfo.DefaultWidthScale),
                         uiSettings.GetString("LinkWorksheet", string.Empty),
                         uiSettings.GetString("LinkRange", string.Empty)))
                 {
@@ -95,7 +99,6 @@ namespace ExcelScheduleLink.Revit2024.Commands
                     }
                     sheetName = dialog.SelectedSheetName;
                     rangeAddress = dialog.RangeAddressOrNull;
-                    widthScale = dialog.WidthScale;
                 }
 
                 // Re-linking an identical workbook/worksheet/range is nearly
@@ -118,7 +121,7 @@ namespace ExcelScheduleLink.Revit2024.Commands
                             {
                                 uidoc.ActiveView = existing;
                             }
-                            catch (Exception)
+                            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
                             {
                             }
                         }
@@ -136,7 +139,6 @@ namespace ExcelScheduleLink.Revit2024.Commands
                 uiSettings.SetString("LinkLastDirectory", Path.GetDirectoryName(xlsxPath) ?? string.Empty);
                 uiSettings.SetString("LinkWorksheet", sheetName);
                 uiSettings.SetString("LinkRange", rangeAddress ?? string.Empty);
-                uiSettings.SetDouble("LinkWidthScale", widthScale);
                 uiSettings.Save();
             }
             catch (ExcelReadException ex)
@@ -146,7 +148,7 @@ namespace ExcelScheduleLink.Revit2024.Commands
             }
 
             ExcelLinkInfo info = BuildLinkInfo(
-                doc, xlsxPath, sheetName, rangeAddress, widthScale, sourceFingerprint);
+                doc, xlsxPath, sheetName, rangeAddress, sourceFingerprint);
 
             // Linking is the first model mutation in this command. The notice is
             // session-local and is intentionally shown after the read/duplicate
@@ -177,7 +179,6 @@ namespace ExcelScheduleLink.Revit2024.Commands
                     ? mutation.StartStatus.Value.ToString() : string.Empty;
                 TaskDialog.Show(UserMessages.DialogTitle,
                     UserMessages.LinkTransactionNotStarted(status));
-                message = status;
                 return Result.Failed;
             }
             if (mutation.Status == ModelMutationStatus.StartThrew)
@@ -186,13 +187,11 @@ namespace ExcelScheduleLink.Revit2024.Commands
                     ? string.Empty : mutation.Exception.Message;
                 TaskDialog.Show(UserMessages.DialogTitle,
                     UserMessages.LinkTransactionNotStarted(detail));
-                message = detail;
                 return Result.Failed;
             }
             if (mutation.Status == ModelMutationStatus.FatalRegeneration)
             {
-                message = UserMessages.RegenerationFailure;
-                TaskDialog.Show(UserMessages.DialogTitle, message);
+                TaskDialog.Show(UserMessages.DialogTitle, UserMessages.RegenerationFailure);
                 return Result.Failed;
             }
             if (mutation.Status == ModelMutationStatus.CommitNotCommitted)
@@ -201,7 +200,6 @@ namespace ExcelScheduleLink.Revit2024.Commands
                     UserMessages.LinkTransactionDidNotCommit).ToString();
                 TaskDialog.Show(UserMessages.DialogTitle,
                     UserMessages.LinkFailedRolledBack(detail, mutation.RollbackVerified));
-                message = UserMessages.LinkTransactionDidNotCommit;
                 return Result.Failed;
             }
             if (mutation.Status == ModelMutationStatus.Aborted)
@@ -209,7 +207,6 @@ namespace ExcelScheduleLink.Revit2024.Commands
                 string detail = mutation.AbortReason;
                 TaskDialog.Show(UserMessages.DialogTitle,
                     UserMessages.LinkFailedRolledBack(detail, mutation.RollbackVerified));
-                message = detail;
                 return Result.Failed;
             }
             if (mutation.Status == ModelMutationStatus.Failed)
@@ -219,7 +216,6 @@ namespace ExcelScheduleLink.Revit2024.Commands
                     string detail = UserMessages.LinkUnsafeStyleValidationFailed(
                         mutation.RollbackVerified);
                     TaskDialog.Show(UserMessages.DialogTitle, detail);
-                    message = detail;
                     return Result.Failed;
                 }
 
@@ -227,7 +223,6 @@ namespace ExcelScheduleLink.Revit2024.Commands
                 TaskDialog.Show(UserMessages.DialogTitle,
                     UserMessages.LinkFailedRolledBack(
                         exception.ToString(), mutation.RollbackVerified));
-                message = exception.Message;
                 return Result.Failed;
             }
 
@@ -238,7 +233,7 @@ namespace ExcelScheduleLink.Revit2024.Commands
             {
                 uidoc.ActiveView = schedule;
             }
-            catch (Exception)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
             }
 
@@ -247,7 +242,9 @@ namespace ExcelScheduleLink.Revit2024.Commands
             summary = UserMessages.AppendRenderNotes(
                 summary, sheet.SourceRowCount, sheet.SourceColumnCount,
                 renderResult.Truncated, renderResult.HasViewWidthProblem,
-                renderResult.ColumnWidthsRejected);
+                renderResult.ColumnWidthsRejected,
+                scheduleName: schedule.Name,
+                rowsMayHideText: renderResult.RowsMayHideText);
             TaskDialog.Show(UserMessages.DialogTitle, summary);
             return Result.Succeeded;
         }
@@ -293,7 +290,7 @@ namespace ExcelScheduleLink.Revit2024.Commands
 
         private static ExcelLinkInfo BuildLinkInfo(
             Document doc, string xlsxPath, string sheetName, string rangeAddress,
-            double widthScale, SourceFingerprint sourceFingerprint)
+            SourceFingerprint sourceFingerprint)
         {
             ExcelLinkInfo info = new ExcelLinkInfo();
             info.SchemaVersion = ExcelLinkInfo.CurrentSchemaVersion;
@@ -308,7 +305,8 @@ namespace ExcelScheduleLink.Revit2024.Commands
             info.CreatedSourceSha256 = sourceFingerprint.Sha256;
             info.LastAcceptedSourceSha256 = sourceFingerprint.Sha256;
             info.LastAcceptedSourceSizeBytes = sourceFingerprint.SizeBytes;
-            info.WidthScale = widthScale;
+            info.WidthScale = ExcelLinkInfo.DefaultWidthScale;
+            info.ColumnWidthMode = ColumnWidthMode.KeepManualWidths;
             return info;
         }
     }

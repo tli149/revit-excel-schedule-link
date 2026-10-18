@@ -41,7 +41,7 @@ you extract it.
 **Symptom:** the script window closes right away, PowerShell says running
 scripts is disabled, or SmartScreen warns about an unknown publisher.
 
-**Cause:** the 0.9.4 pilot files are not digitally signed, and your computer's
+**Cause:** the 0.10.0 pilot files are not digitally signed, and your computer's
 policy does not allow unsigned scripts from the internet.
 
 **Fix:** unblock the ZIP before extracting (see INSTALL.md, Step 1), then use
@@ -91,21 +91,54 @@ location. Create a new link to the right file.
 
 ## 7. Columns are too narrow or too wide
 
-- In **Link Manager**, select the link, set **Column width scale**
-  (1.5–2.0 is recommended), then click **Reload selected**.
-- Or use the **Layout** panel: **Quick Layout → Fit Content**, or
-  **Column Widths…** for exact values.
-- To keep widths you dragged by hand, set **Column width mode** to
-  **Keep manual widths** in Link Manager.
+- Use the **Layout** panel: **Quick Layout → Fit Content**, or **Column
+  Widths…** for exact values. Fit Content keeps the current total only within
+  the supported total-width range and reports values or merged cells that may
+  wrap. If the total is below or above that range, it uses all-minimum or
+  all-maximum widths and warns that the total cannot be kept. To choose a wider
+  supported total, enter a new **Table width** and press **Fit to Total**.
+- **Restore Excel Widths** reads the current worksheet and applies its widths,
+  so it can change the table total.
+- In Column Widths, changed values must be from **30.5 to 609.6 mm** or
+  **1.20 to 24.00 in**. A width made narrower by dragging in Revit can remain
+  below that range as long as you do not change that cell in the dialog.
+- If a width cell contains text that is not a number, the cell is marked and the
+  status line at the bottom explains the problem and the range. Apply is blocked
+  until the value is corrected.
+- To keep widths on reload, choose **Keep these widths on reload** in Column
+  Widths. New links keep their current widths by default; existing links retain
+  their saved policies and factors.
 
-## 8. Revit says "Column Width Too Large" while dragging
+## 8. Text is wrapped or hidden after a width change
 
-This is Revit's own limit for schedule columns. The add-in keeps every width it
-sets within that limit. You are more likely to hit it when dragging by hand at
-large width scales. Use a scale of 1.5–2.0 and make the table wider on the
-sheet instead.
+- **Fit rows to text on reload** makes the add-in set every header-row height on
+  Link, Reload, and every Column Widths Apply, including Quick Layout. It may
+  make rows taller or shorter. Revit does not grow the rows automatically just
+  because text wraps.
+- **Keep current row heights on reload** disables text fitting. Apply leaves the
+  current heights alone; Reload restores captured heights where possible and
+  reports **Revit did not keep the saved height for N row(s).** Wrapped text may
+  be hidden. Choose Fit rows to text and apply, or adjust the row heights
+  yourself.
+- If a known set of rows cannot be fitted, the action still succeeds and reports
+  **Text may be hidden in N row(s): the rows could not be fitted to their text.**
+  If fitting measurements are unavailable, it says that rows could not be fitted
+  because measurements were unavailable and asks you to check for hidden text.
+  These are warnings about visibility, not proof that all text is visible. Check
+  the view, sheet and exported PDF.
+- The fitted values are estimates calibrated on screen at 150% with Arial. Very
+  long Latin prose can wrap one line more than estimated. Sheet/PDF output was
+  checked for the tested tables, not every font or table size; 500-row performance
+  has not yet been measured.
 
-## 9. A lone "A" appears under the table in the schedule view
+## 9. Revit says "Column Width Too Large" while dragging
+
+This is Revit's own limit for schedule columns. The add-in keeps changed values
+within its supported range, but a native drag can leave an already narrow width
+below the dialog's displayed range. Use Column Widths and **Fit to Total** to
+make the table wider when needed.
+
+## 10. A lone "A" appears under the table in the schedule view
 
 That is Revit's column letter for a hidden helper column. It never shows on
 sheets, prints or PDFs.
@@ -114,19 +147,19 @@ Its width still matters because the schedule view fits the table inside it.
 The add-in sets it to the table width on every link and reload. If a table
 looks squeezed into one narrow column, **reload the link once**.
 
-## 10. The whole table disappeared from the schedule view
+## 11. The whole table disappeared from the schedule view
 
 The table probably disappeared because *Show Title* was turned off in the
 schedule's Appearance settings. Turn **Show Title** back on — the table lives
 in the title area.
 
-## 11. My worksheet is not in the dropdown
+## 12. My worksheet is not in the dropdown
 
 The dropdown lists every sheet in the workbook you picked. If one is missing,
 you may not have saved the workbook after adding the sheet, or you may have
 picked a different file. Save in Excel and try again.
 
-## 12. Revit closed when I opened a linked schedule, or you see "Unsafe Excel-linked schedule styles were found."
+## 13. Revit closed when I opened a linked schedule, or you see "Unsafe Excel-linked schedule styles were found."
 
 **Cause:** a version before 0.9.2 saved this table with cells that have no cell
 style. Opening that schedule view can close Revit 2024. The Revit journal may
@@ -148,9 +181,12 @@ contain `NULL pStyle for cell in initCellStyle()`.
 If the repair says the model is read-only, save an editable copy first. If
 another user has borrowed the schedule, ask them to synchronize and relinquish
 it, reload latest, and try again. If Revit reports a regeneration failure,
-close the model **without saving** and reopen it.
+close the model **without saving** and reopen it. The add-in stops all further
+automatic work for that document session after this failure. Any change that
+had already completed before the failure remains; the failed action is not
+treated as successful. You see one add-in message, not a second Revit error box.
 
-## 13. The message says "Rollback completion could not be verified."
+## 14. The message says "Rollback completion could not be verified."
 
 Revit did not confirm that the failed change was fully undone. Close the model
 **without saving**, open it again, and check the schedule before you continue.
@@ -163,7 +199,7 @@ Open an issue on the project's GitHub page. Include:
 
 1. What you clicked and what you expected.
 2. The exact message text (a screenshot is fine).
-3. Your Revit 2024 build (Help → About) and the add-in version (0.9.4).
+3. Your Revit 2024 build (Help → About) and the add-in version (0.10.0).
 4. For "nothing happens" problems: the relevant lines of the newest journal
    file from `%LOCALAPPDATA%\Autodesk\Revit\Autodesk Revit 2024\Journals\`.
 

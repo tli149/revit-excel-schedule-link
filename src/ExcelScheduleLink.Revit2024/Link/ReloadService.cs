@@ -40,6 +40,7 @@ namespace ExcelScheduleLink.Revit2024.Link
         public SourceFingerprint CurrentSourceFingerprint;
         public int Rows;
         public int Columns;
+        public int? PreviousColumns;
         public bool Truncated;
         public int SourceRows;
         public int SourceColumns;
@@ -51,6 +52,12 @@ namespace ExcelScheduleLink.Revit2024.Link
         /// <summary>Header columns whose width Revit refused (0 = all applied).</summary>
         public int ColumnWidthsRejected;
 
+        /// <summary>Keep row heights Revit refused or did not retain (0 = all retained).</summary>
+        public int RowHeightsRejected;
+
+        /// <summary>Distinct header rows whose fitted text may remain hidden.</summary>
+        public int? RowsMayHideText = 0;
+
         /// <summary>
         /// Session-only evidence supplied by a completed scan. It is never
         /// persisted and never used as a reload gate.
@@ -59,6 +66,12 @@ namespace ExcelScheduleLink.Revit2024.Link
         public bool UnsafeStylesRepaired;
 
         public bool IsSuccess { get { return Kind == ReloadResultKind.Success; } }
+        public bool ColumnCountChanged
+        {
+            get { return IsSuccess && PreviousColumns.HasValue
+                && PreviousColumns.Value > 0 && Columns > 0
+                && PreviousColumns.Value != Columns; }
+        }
         public bool IsWorkbookUnavailable
         {
             get
@@ -86,7 +99,6 @@ namespace ExcelScheduleLink.Revit2024.Link
         public static ReloadOutcome Reload(
             Document doc, ViewSchedule schedule,
             ReloadScope scope = ReloadScope.SingleLink,
-            PendingLinkSettings pendingSettings = null,
             StyleIntegrityResult preReloadIntegrityHint = null)
         {
             ReloadOutcome outcome = new ReloadOutcome();
@@ -145,10 +157,8 @@ namespace ExcelScheduleLink.Revit2024.Link
                 doc, schedule.Id, out creator);
             bool widthWarning = creatorRelation == CreatorRelation.Different
                 || creatorRelation == CreatorRelation.Unavailable;
-            ColumnWidthMode effectiveColumnMode = pendingSettings != null
-                ? pendingSettings.ColumnWidthMode : info.ColumnWidthMode;
             widthWarning = widthWarning
-                && effectiveColumnMode == ColumnWidthMode.ApplyExcelWidths;
+                && info.ColumnWidthMode == ColumnWidthMode.ApplyExcelWidths;
             ReloadDecision decision = ReloadDecisionTable.Decide(
                 identity, creatorRelation, scope, widthWarning);
 
@@ -211,12 +221,6 @@ namespace ExcelScheduleLink.Revit2024.Link
                         }
 
                         ExcelLinkInfo transactionInfo = loaded.Info;
-                        if (pendingSettings != null)
-                        {
-                            transactionInfo.ColumnWidthMode = pendingSettings.ColumnWidthMode;
-                            transactionInfo.RowHeightMode = pendingSettings.RowHeightMode;
-                            transactionInfo.WidthScale = pendingSettings.WidthScale;
-                        }
 
                         HeaderTableRenderer.RenderResult render = HeaderTableRenderer.Render(
                             schedule, sheet, transactionInfo.WidthScale,
@@ -266,9 +270,12 @@ namespace ExcelScheduleLink.Revit2024.Link
                 outcome.Kind = ReloadResultKind.Success;
                 outcome.Rows = render.RowsRendered;
                 outcome.Columns = render.ColumnsRendered;
+                outcome.PreviousColumns = render.PreviousColumns;
                 outcome.Truncated = render.Truncated;
                 outcome.ViewWidthProblem = render.HasViewWidthProblem;
                 outcome.ColumnWidthsRejected = render.ColumnWidthsRejected;
+                outcome.RowHeightsRejected = render.RowHeightsRejected;
+                outcome.RowsMayHideText = render.RowsMayHideText;
                 outcome.UnsafeStylesRepaired = outcome.KnownAffectedBeforeReload;
                 return outcome;
             }
@@ -380,7 +387,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                         outcome.ScheduleName, owner, nothingChanged);
                 }
             }
-            catch (Exception)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 // Checkout status is a local advisory. The authoritative
                 // transaction result and its rollback qualification remain the

@@ -55,7 +55,6 @@ namespace ExcelScheduleLink.Revit2024.Commands
                     + "the step: a missing evidence file must not be read as a step\n"
                     + "that was skipped.\n\n"
                     + ex);
-                message = ex.Message;
                 return Result.Failed;
             }
 

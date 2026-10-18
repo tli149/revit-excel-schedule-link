@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Autodesk.Revit.DB;
 using ExcelScheduleLink.Contracts;
+using ExcelScheduleLink.Layout;
 using ExcelScheduleLink.Revit2024.Probing;
 
 namespace ExcelScheduleLink.Revit2024.Link
@@ -15,6 +16,39 @@ namespace ExcelScheduleLink.Revit2024.Link
     {
         internal const string ReadTransactionName =
             "Excel Schedule Link - Check Schedule Styles";
+        private const double TextSizeTableUnitsPerInch = 96.0;
+
+        internal static double GetConservativeTextSizeFeet(CellStyleFacts cell)
+        {
+            if (cell == null)
+            {
+                throw new ArgumentNullException("cell");
+            }
+            if (cell.TextSize <= 0.0 || double.IsNaN(cell.TextSize)
+                || double.IsInfinity(cell.TextSize))
+            {
+                throw new ArgumentException(
+                    "The cell text size must be finite and positive.",
+                    "cell");
+            }
+
+            double tableUnits = cell.TextSize
+                + StyleIntegrityDecisionTable.QuantizedAmbiguousSizeToleranceTableUnits;
+            if (double.IsNaN(tableUnits) || double.IsInfinity(tableUnits))
+            {
+                throw new ArgumentException(
+                    "The conservative text size is too large.", "cell");
+            }
+            double result = tableUnits / TextSizeTableUnitsPerInch
+                / LayoutMetrics.InchesPerFoot;
+            if (result <= 0.0 || double.IsNaN(result)
+                || double.IsInfinity(result))
+            {
+                throw new ArgumentException(
+                    "The conservative text size is invalid.", "cell");
+            }
+            return result;
+        }
 
         public static StyleIntegrityResult ScanWithRolledBackTransaction(
             Document doc, ViewSchedule schedule)
@@ -40,7 +74,7 @@ namespace ExcelScheduleLink.Revit2024.Link
             {
                 result.DocumentModifiedBeforeScan = doc.IsModified;
             }
-            catch (Exception)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 // The evidence field is optional; the scan can still be safe.
             }
@@ -58,6 +92,7 @@ namespace ExcelScheduleLink.Revit2024.Link
 
             Transaction transaction = null;
             bool started = false;
+            bool fatalRegeneration = false;
             try
             {
                 transaction = new Transaction(doc, ReadTransactionName);
@@ -75,10 +110,23 @@ namespace ExcelScheduleLink.Revit2024.Link
                         "The document was not modifiable after the transaction started.");
                 }
 
+                // A probe-armed marker for a fatal read outside ModelMutation. It
+                // takes the native exception's route: rollback, no further read,
+                // then on to the caller's FatalRegenerationBoundary.
+                if (DebugRegenerationFailureInjector.ConsumeRolledBackReadFailure())
+                {
+                    throw new RegenerationFailureProbeException();
+                }
+
                 result = ScanInOpenTransaction(
                     doc, schedule, false, remainingAutomaticCellBudget);
                 result.ReadTransactionStartStatus = startStatus.ToString();
                 return result;
+            }
+            catch (Exception ex) when (ModelMutation.IsFatalRegeneration(ex))
+            {
+                fatalRegeneration = true;
+                throw;
             }
             catch (Exception ex)
             {
@@ -89,43 +137,73 @@ namespace ExcelScheduleLink.Revit2024.Link
             }
             finally
             {
-                if (transaction != null && started)
+                bool rollbackVerified = !started;
+                try
                 {
-                    try
+                    if (transaction != null && started)
                     {
-                        TransactionStatus? rollbackStatus =
-                            TransactionRollback.RollBackIfStarted(transaction);
-                        result.ReadTransactionRollbackStatus = rollbackStatus.HasValue
-                            ? rollbackStatus.Value.ToString() : "Unreadable";
-                        if (rollbackStatus != TransactionStatus.RolledBack)
+                        try
                         {
-                            result.ReadTransactionRollbackError =
-                                "The scan transaction rollback final status was "
-                                + result.ReadTransactionRollbackStatus + ".";
+                            TransactionStatus? rollbackStatus =
+                                TransactionRollback.RollBackIfStarted(transaction);
+                            result.ReadTransactionRollbackStatus = rollbackStatus.HasValue
+                                ? rollbackStatus.Value.ToString() : "Unreadable";
+                            rollbackVerified =
+                                rollbackStatus == TransactionStatus.RolledBack;
+                            if (rollbackStatus != TransactionStatus.RolledBack)
+                            {
+                                result.ReadTransactionRollbackError =
+                                    "The scan transaction rollback final status was "
+                                    + result.ReadTransactionRollbackStatus + ".";
+                                FailureInto(result, StyleIntegrityReasonCode.TransactionRollbackFailed,
+                                    result.ReadTransactionRollbackError);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            result.ReadTransactionRollbackStatus = "Failed";
+                            result.ReadTransactionRollbackError = FormatException(ex);
                             FailureInto(result, StyleIntegrityReasonCode.TransactionRollbackFailed,
                                 result.ReadTransactionRollbackError);
                         }
                     }
-                    catch (Exception ex)
+
+                    // No further document read is authorized after an unverified
+                    // rollback or a fatal regeneration; the optional evidence then
+                    // stays unset.
+                    if (rollbackVerified && !fatalRegeneration)
                     {
-                        result.ReadTransactionRollbackStatus = "Failed";
-                        result.ReadTransactionRollbackError = FormatException(ex);
-                        FailureInto(result, StyleIntegrityReasonCode.TransactionRollbackFailed,
-                            result.ReadTransactionRollbackError);
+                        try
+                        {
+                            result.DocumentModifiedAfterRollback = doc.IsModified;
+                        }
+                        catch (Exception ex) when (ModelMutation.IsFatalRegeneration(ex))
+                        {
+                            fatalRegeneration = true;
+                            throw;
+                        }
+                        catch (Exception)
+                        {
+                            // Keep the scan result, but leave the optional evidence unset.
+                        }
                     }
                 }
-
-                try
+                finally
                 {
-                    result.DocumentModifiedAfterRollback = doc.IsModified;
-                }
-                catch (Exception)
-                {
-                    // Keep the scan result, but leave the optional evidence unset.
-                }
-                if (transaction != null)
-                {
-                    transaction.Dispose();
+                    if (transaction != null)
+                    {
+                        if (fatalRegeneration)
+                        {
+                            // A fatal is already propagating; a secondary cleanup failure must not
+                            // replace it. A fatal from Dispose itself still propagates.
+                            try { transaction.Dispose(); }
+                            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex)) { }
+                        }
+                        else
+                        {
+                            transaction.Dispose();
+                        }
+                    }
                 }
             }
         }
@@ -215,7 +293,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                         "The header section was unavailable.");
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 return Failure(IsElementReadDenied(ex)
                     ? StyleIntegrityReasonCode.ElementReadDenied
@@ -233,7 +311,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                 facts.DimensionsRead = facts.NumberOfRows > 0
                     && facts.NumberOfColumns > 0;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 facts.FirstReadError = FormatException(ex);
                 facts.DimensionsRead = false;
@@ -262,7 +340,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                 facts.TitleTextStyle = ResolveTextStyle(
                     doc, schedule.TitleTextTypeId, "TitleTextTypeId", facts);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 facts.TitleTextStyle = TextStyleReadFailure(
                     new TextStyleFacts { ReadAttempted = true }, facts,
@@ -273,7 +351,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                 facts.HeaderTextStyle = ResolveTextStyle(
                     doc, schedule.HeaderTextTypeId, "HeaderTextTypeId", facts);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 facts.HeaderTextStyle = TextStyleReadFailure(
                     new TextStyleFacts { ReadAttempted = true }, facts,
@@ -367,7 +445,7 @@ namespace ExcelScheduleLink.Revit2024.Link
             {
                 element = doc.GetElement(id);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 return TextStyleReadFailure(result, facts,
                     label + " could not be read: " + FormatException(ex), ex);
@@ -409,7 +487,8 @@ namespace ExcelScheduleLink.Revit2024.Link
                 result.SizeInches = UnitUtils.ConvertFromInternalUnits(
                     result.RawSize, UnitTypeId.Inches);
                 result.SizePoints = result.SizeInches * 72.0;
-                result.SizeTableUnits = result.SizeInches * 96.0;
+                result.SizeTableUnits = result.SizeInches
+                    * TextSizeTableUnitsPerInch;
                 result.IsResolvable = !string.IsNullOrEmpty(result.FontName)
                     && !double.IsNaN(result.SizePoints)
                     && !double.IsInfinity(result.SizePoints)
@@ -422,7 +501,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                 }
                 return result;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 return TextStyleReadFailure(result, facts,
                     label + " text style read failed: " + FormatException(ex), ex);
@@ -455,7 +534,7 @@ namespace ExcelScheduleLink.Revit2024.Link
             {
                 cell.IsCellOverridden = section.IsCellOverridden(actualRow, actualColumn);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 cell.ReadComplete = false;
                 errors.Add("IsCellOverridden: " + FormatException(ex));
@@ -466,7 +545,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                 cell.CellTypeReadComplete = true;
                 cell.IsTextCell = section.GetCellType(actualRow, actualColumn) == CellType.Text;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 cell.ReadComplete = false;
                 errors.Add("GetCellType: " + FormatException(ex));
@@ -482,7 +561,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                     errors.Add("GetTableCellStyle returned null.");
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 cell.ReadComplete = false;
                 errors.Add("GetTableCellStyle: " + FormatException(ex));
@@ -490,20 +569,13 @@ namespace ExcelScheduleLink.Revit2024.Link
 
             if (style != null)
             {
-                try { cell.FontName = style.FontName; }
-                catch (Exception ex) { cell.ReadComplete = false; errors.Add("FontName: " + FormatException(ex)); }
-                try { cell.TextSize = style.TextSize; }
-                catch (Exception ex) { cell.ReadComplete = false; errors.Add("TextSize: " + FormatException(ex)); }
-                try { cell.IsStyleOverridden = style.IsOverridden; }
-                catch (Exception ex) { cell.ReadComplete = false; errors.Add("IsOverridden: " + FormatException(ex)); }
-                try { cell.BorderTopLineStyle = style.BorderTopLineStyle.Value; }
-                catch (Exception ex) { cell.ReadComplete = false; errors.Add("BorderTopLineStyle: " + FormatException(ex)); }
-                try { cell.BorderBottomLineStyle = style.BorderBottomLineStyle.Value; }
-                catch (Exception ex) { cell.ReadComplete = false; errors.Add("BorderBottomLineStyle: " + FormatException(ex)); }
-                try { cell.BorderLeftLineStyle = style.BorderLeftLineStyle.Value; }
-                catch (Exception ex) { cell.ReadComplete = false; errors.Add("BorderLeftLineStyle: " + FormatException(ex)); }
-                try { cell.BorderRightLineStyle = style.BorderRightLineStyle.Value; }
-                catch (Exception ex) { cell.ReadComplete = false; errors.Add("BorderRightLineStyle: " + FormatException(ex)); }
+                ReadStyleProperty(cell, "FontName", delegate { cell.FontName = style.FontName; }, errors);
+                ReadStyleProperty(cell, "TextSize", delegate { cell.TextSize = style.TextSize; }, errors);
+                ReadStyleProperty(cell, "IsOverridden", delegate { cell.IsStyleOverridden = style.IsOverridden; }, errors);
+                ReadStyleProperty(cell, "BorderTopLineStyle", delegate { cell.BorderTopLineStyle = style.BorderTopLineStyle.Value; }, errors);
+                ReadStyleProperty(cell, "BorderBottomLineStyle", delegate { cell.BorderBottomLineStyle = style.BorderBottomLineStyle.Value; }, errors);
+                ReadStyleProperty(cell, "BorderLeftLineStyle", delegate { cell.BorderLeftLineStyle = style.BorderLeftLineStyle.Value; }, errors);
+                ReadStyleProperty(cell, "BorderRightLineStyle", delegate { cell.BorderRightLineStyle = style.BorderRightLineStyle.Value; }, errors);
 
                 try
                 {
@@ -523,7 +595,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                         cell.ReadComplete = false;
                     }
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
                 {
                     cell.ReadComplete = false;
                     errors.Add("GetCellStyleOverrideOptions: " + FormatException(ex));
@@ -533,6 +605,20 @@ namespace ExcelScheduleLink.Revit2024.Link
             cell.ReadError = string.Join("; ", errors.ToArray());
             cell.ElementReadDenied = LooksLikeElementReadDenied(cell.ReadError);
             return cell;
+        }
+
+        private static void ReadStyleProperty(
+            CellStyleFacts cell, string name, Action read, IList<string> errors)
+        {
+            try
+            {
+                read();
+            }
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
+            {
+                cell.ReadComplete = false;
+                errors.Add(name + ": " + FormatException(ex));
+            }
         }
 
         private static bool ReadAnyOverrideOption(
@@ -565,7 +651,7 @@ namespace ExcelScheduleLink.Revit2024.Link
             {
                 return read();
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 errors.Add("override." + name + ": " + FormatException(ex));
                 return false;

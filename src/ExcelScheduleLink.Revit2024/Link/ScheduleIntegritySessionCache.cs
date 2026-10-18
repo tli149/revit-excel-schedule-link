@@ -153,9 +153,23 @@ namespace ExcelScheduleLink.Revit2024.Link
             new List<ScheduleIntegrityDocumentState>();
         private static readonly List<PendingClose> PendingCloses =
             new List<PendingClose>();
+        private static long _fatalRegenerationsSeen;
+
+        // A fatal regeneration was recorded somewhere. The document it came from cannot be
+        // identified safely (FindIndex reads every retained wrapper), so every retained state
+        // and pending close is dropped without reading any of them.
+        private static void DropAllAfterFatalRegeneration()
+        {
+            long count = ModelMutation.FatalRegenerationCount;
+            if (count == _fatalRegenerationsSeen) return;
+            _fatalRegenerationsSeen = count;
+            States.Clear();
+            PendingCloses.Clear();
+        }
 
         public static ScheduleIntegrityDocumentState BeginAutomatic(Document doc)
         {
+            DropAllAfterFatalRegeneration();
             if (doc == null)
             {
                 return null;
@@ -178,6 +192,7 @@ namespace ExcelScheduleLink.Revit2024.Link
 
         public static ScheduleIntegrityDocumentState GetOrCreate(Document doc)
         {
+            DropAllAfterFatalRegeneration();
             if (doc == null)
             {
                 return null;
@@ -195,6 +210,7 @@ namespace ExcelScheduleLink.Revit2024.Link
 
         public static IList<ScheduleIntegrityDocumentState> GetStates()
         {
+            DropAllAfterFatalRegeneration();
             return new List<ScheduleIntegrityDocumentState>(States);
         }
 
@@ -204,6 +220,7 @@ namespace ExcelScheduleLink.Revit2024.Link
         /// </summary>
         public static bool HasPendingWork()
         {
+            DropAllAfterFatalRegeneration();
             foreach (ScheduleIntegrityDocumentState state in States)
             {
                 if (state != null && state.HasPendingWork)
@@ -221,6 +238,7 @@ namespace ExcelScheduleLink.Revit2024.Link
         /// </summary>
         public static void PruneInvalidDocuments()
         {
+            DropAllAfterFatalRegeneration();
             for (int index = States.Count - 1; index >= 0; index--)
             {
                 ScheduleIntegrityDocumentState state = States[index];
@@ -230,7 +248,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                     valid = state != null && state.Document != null
                         && state.Document.IsValidObject;
                 }
-                catch (Exception)
+                catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
                 {
                     valid = false;
                 }
@@ -245,6 +263,7 @@ namespace ExcelScheduleLink.Revit2024.Link
 
         public static IList<ScheduleIntegrityDocumentState> GetPendingStates()
         {
+            DropAllAfterFatalRegeneration();
             List<ScheduleIntegrityDocumentState> pending =
                 new List<ScheduleIntegrityDocumentState>();
             foreach (ScheduleIntegrityDocumentState state in States)
@@ -288,6 +307,7 @@ namespace ExcelScheduleLink.Revit2024.Link
         public static StyleIntegrityResult Rescan(
             Document doc, ViewSchedule schedule)
         {
+            DropAllAfterFatalRegeneration();
             StyleIntegrityResult result =
                 ScheduleStyleIntegrityScanner.ScanWithRolledBackTransaction(
                     doc, schedule);
@@ -305,6 +325,7 @@ namespace ExcelScheduleLink.Revit2024.Link
         /// </summary>
         public static void MarkClosing(int documentId, Document doc)
         {
+            DropAllAfterFatalRegeneration();
             if (doc == null)
             {
                 return;
@@ -321,6 +342,7 @@ namespace ExcelScheduleLink.Revit2024.Link
 
         public static void RemoveAfterSuccessfulClose(int documentId)
         {
+            DropAllAfterFatalRegeneration();
             for (int index = PendingCloses.Count - 1; index >= 0; index--)
             {
                 PendingClose pending = PendingCloses[index];
@@ -335,6 +357,7 @@ namespace ExcelScheduleLink.Revit2024.Link
 
         public static void PreserveAfterCancelledClose(int documentId)
         {
+            DropAllAfterFatalRegeneration();
             for (int index = PendingCloses.Count - 1; index >= 0; index--)
             {
                 if (SameDocumentId(PendingCloses[index].DocumentId, documentId))
@@ -346,6 +369,7 @@ namespace ExcelScheduleLink.Revit2024.Link
 
         public static void Remove(Document doc)
         {
+            DropAllAfterFatalRegeneration();
             int index = FindIndex(doc);
             if (index >= 0)
             {
@@ -465,7 +489,8 @@ namespace ExcelScheduleLink.Revit2024.Link
 
         // Keep this pattern in sync with WorksharingAdvisory. Reference
         // equality is the fast path; underlying equality is attempted only
-        // while both wrappers are valid and is never allowed to escape.
+        // while both wrappers are valid, and only a fatal regeneration may
+        // escape.
         private static bool SameDocument(Document left, Document right)
         {
             if (ReferenceEquals(left, right))
@@ -480,7 +505,7 @@ namespace ExcelScheduleLink.Revit2024.Link
             {
                 return left.IsValidObject && right.IsValidObject && left.Equals(right);
             }
-            catch (Exception)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 return false;
             }

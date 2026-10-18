@@ -34,8 +34,8 @@ namespace ExcelScheduleLink.Revit2024.Link
     /// <summary>How row heights are treated on reload.</summary>
     internal enum RowHeightMode
     {
-        /// <summary>Apply Excel-derived or auto-computed row heights on every reload.</summary>
-        ApplyExcelHeights = 0,
+        /// <summary>Use Revit's default row sizing on every reload.</summary>
+        UseDefaultHeights = 0,
         /// <summary>Keep row heights manually adjusted on the Revit side.</summary>
         KeepManualHeights = 1
     }
@@ -76,13 +76,14 @@ namespace ExcelScheduleLink.Revit2024.Link
         public long LastAcceptedSourceSizeBytes;
 
         public ColumnWidthMode ColumnWidthMode = ColumnWidthMode.ApplyExcelWidths;
-        public RowHeightMode RowHeightMode = RowHeightMode.ApplyExcelHeights;
+        public RowHeightMode RowHeightMode = RowHeightMode.UseDefaultHeights;
         /// <summary>
         /// Global multiplier applied when converting Excel column widths to
         /// Revit widths. Default revisited to 1.5 after the v0.3.2 on-machine
         /// test (1.0 was too narrow; 1.2 still felt cramped; ~1.5 reads best in
-        /// practice). Content-based minimum widths apply on top of this scale,
-        /// and the user can change it per link in the dialog.
+        /// practice). Content-based minimum widths apply on top of this scale.
+        /// New links always store the default; a value saved by an older version
+        /// is kept and still used, but there is no longer a UI to change it.
         /// </summary>
         public const double DefaultWidthScale = 1.5;
         public double WidthScale = DefaultWidthScale;

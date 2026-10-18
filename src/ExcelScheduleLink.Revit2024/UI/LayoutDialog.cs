@@ -20,7 +20,7 @@ namespace ExcelScheduleLink.Revit2024.UI
 
     /// <summary>
     /// Plain data the dialog hands back to the command: candidate widths in
-    /// column order, the chosen reload policy and the requested action. The
+    /// column order, the chosen reload policies and the requested action. The
     /// dialog itself never touches Revit (no transaction, no ActiveView change).
     /// </summary>
     internal sealed class LayoutDialogOutcome
@@ -28,7 +28,9 @@ namespace ExcelScheduleLink.Revit2024.UI
         public LayoutDialogAction Action = LayoutDialogAction.Cancelled;
         public double[] CandidateFeet;
         public ColumnWidthMode ReloadPolicy;
+        public RowHeightMode RowReloadPolicy;
         public LayoutSourceSnapshot SourceSnapshot;
+        public FixedTotalFitResult FitContentDiagnostics;
     }
 
     /// <summary>
@@ -53,22 +55,30 @@ namespace ExcelScheduleLink.Revit2024.UI
         private const string WidthColumnName = "width";
 
         private readonly LengthUnitChoice _unit;
-        private readonly Func<FitContentResult> _fitContent;
+        private readonly string[] _columnHeadings;
+        private readonly Func<double[], FitContentResult> _fitContent;
         private readonly Func<ExcelWidthResult> _restoreExcel;
-        private readonly Func<double[], ColumnWidthMode, LayoutSourceSnapshot, LayoutApplyResult> _applyNow;
+        private readonly Func<double[], ColumnWidthMode, RowHeightMode, LayoutSourceSnapshot, LayoutApplyResult> _applyNow;
         private readonly int _columnCount;
+        private readonly TableLayoutPanel _root;
+        private readonly Control _buttonRow;
 
         private readonly DataGridView _grid;
         private readonly TextBox _targetTotal;
         private readonly Label _status;
         private readonly RadioButton _policyKeep;
         private readonly RadioButton _policyRecalculate;
+        private readonly RadioButton _rowPolicyDefault;
+        private readonly RadioButton _rowPolicyKeep;
         private readonly Button _applyClose;
+        private Label _comfortableWidth;
 
         private bool _dirty;
         private bool _suppressEvents;
+        private bool _updatingContentMinimum;
         private bool _fatalRegenerationFailure;
         private LayoutSourceSnapshot _sourceSnapshot;
+        private FixedTotalFitResult _fitContentDiagnostics;
 
         public LayoutDialogOutcome Outcome { get; private set; }
 
@@ -76,17 +86,27 @@ namespace ExcelScheduleLink.Revit2024.UI
             string scheduleName,
             double[] currentFeet,
             ColumnWidthMode currentMode,
+            RowHeightMode currentRowMode,
             LengthUnitChoice unit,
-            Func<FitContentResult> fitContentProvider,
+            IReadOnlyList<string> columnHeadings,
+            Func<double[], FitContentResult> fitContentProvider,
             Func<ExcelWidthResult> restoreExcelProvider,
-            Func<double[], ColumnWidthMode, LayoutSourceSnapshot, LayoutApplyResult> applyNowProvider)
+            Func<double[], ColumnWidthMode, RowHeightMode, LayoutSourceSnapshot, LayoutApplyResult> applyNowProvider)
         {
             _unit = unit;
+            _columnHeadings = NormalizeColumnHeadings(columnHeadings,
+                currentFeet != null ? currentFeet.Length : 0);
             _fitContent = fitContentProvider;
             _restoreExcel = restoreExcelProvider;
             _applyNow = applyNowProvider;
             _columnCount = currentFeet != null ? currentFeet.Length : 0;
-            Outcome = new LayoutDialogOutcome { ReloadPolicy = currentMode };
+            Outcome = new LayoutDialogOutcome
+            {
+                ReloadPolicy = currentMode,
+                RowReloadPolicy = currentRowMode == RowHeightMode.KeepManualHeights
+                    ? RowHeightMode.KeepManualHeights
+                    : RowHeightMode.UseDefaultHeights
+            };
 
             // DPI: deliberately no AutoScaleMode and no explicit Font here. Doing
             // nothing about DPI - inheriting Revit's own awareness and WinForms'
@@ -106,13 +126,15 @@ namespace ExcelScheduleLink.Revit2024.UI
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
                 RowCount = 6,
-                Padding = new Padding(12)
+                Padding = new Padding(12),
+                AutoScroll = true // scroll content instead of letting rows overlap
             };
+            _root = root;
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f)); // never auto-expand
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // schedule label
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f)); // grid
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // quick layout
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // reload policy
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // reload policies
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // status
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // buttons
 
@@ -127,7 +149,10 @@ namespace ExcelScheduleLink.Revit2024.UI
             _grid = BuildGrid();
             root.Controls.Add(_grid, 0, 1);
             root.Controls.Add(BuildQuickGroup(), 0, 2);
-            root.Controls.Add(BuildPolicyGroup(currentMode, out _policyKeep, out _policyRecalculate), 0, 3);
+            root.Controls.Add(BuildPolicyGroup(
+                currentMode, currentRowMode,
+                out _policyKeep, out _policyRecalculate,
+                out _rowPolicyDefault, out _rowPolicyKeep), 0, 3);
 
             _status = new Label
             {
@@ -138,9 +163,11 @@ namespace ExcelScheduleLink.Revit2024.UI
             root.Controls.Add(_status, 0, 4);
 
             Control buttons = BuildButtons(out _applyClose);
+            _buttonRow = buttons;
             root.Controls.Add(buttons, 0, 5);
 
             Controls.Add(root);
+            root.SizeChanged += OnRootSizeChanged;
             AcceptButton = _applyClose;
 
             Control[] found = Controls.Find("targetTotal", true);
@@ -149,6 +176,130 @@ namespace ExcelScheduleLink.Revit2024.UI
             LoadRows(currentFeet);
             _targetTotal.Text = FormatDisplay(SumFeet()); // default target = current total
             UpdateStatus();
+        }
+
+        protected override void OnLoad(EventArgs e)
+        {
+            // Size first: Form.OnLoad centers a modal dialog on its parent, so the
+            // final size must be known before that happens.
+            EnsureContentWidth();
+            EnsureContentHeight();
+            base.OnLoad(e);
+        }
+
+        /// <summary>
+        /// Raises the minimum width so the button row fits beside a vertical
+        /// scrollbar at the inherited font size. Measured once, at load.
+        /// </summary>
+        private void EnsureContentWidth()
+        {
+            int requiredClientWidth = _root.Padding.Horizontal
+                + _buttonRow.Margin.Horizontal
+                + _buttonRow.GetPreferredSize(Size.Empty).Width
+                + SystemInformation.VerticalScrollBarWidth;
+            int requiredWidth = requiredClientWidth + (Width - ClientSize.Width);
+            if (requiredWidth > MinimumSize.Width)
+            {
+                MinimumSize = new Size(requiredWidth, MinimumSize.Height);
+            }
+            if (Width < MinimumSize.Width)
+            {
+                Width = MinimumSize.Width;
+            }
+        }
+
+        private void EnsureContentHeight()
+        {
+            if (_updatingContentMinimum)
+            {
+                return;
+            }
+
+            _updatingContentMinimum = true;
+            try
+            {
+                int requiredClientHeight = GetRequiredClientHeight();
+                _root.AutoScrollMinSize = new Size(0, requiredClientHeight);
+
+                if (requiredClientHeight <= ClientSize.Height)
+                {
+                    return;
+                }
+
+                int nonClientHeight = Height - ClientSize.Height;
+                Screen screen = Screen.FromControl(this);
+                int maximumClientHeight = Math.Max(
+                    0, screen.WorkingArea.Height - nonClientHeight);
+                int targetClientHeight = Math.Min(requiredClientHeight, maximumClientHeight);
+                if (targetClientHeight <= ClientSize.Height)
+                {
+                    return;
+                }
+
+                ClientSize = new Size(ClientSize.Width, targetClientHeight);
+                _root.PerformLayout();
+            }
+            finally
+            {
+                _updatingContentMinimum = false;
+            }
+        }
+
+        private int GetRequiredClientHeight()
+        {
+            _root.PerformLayout();
+
+            int contentWidth = Math.Max(0, _root.ClientSize.Width - _root.Padding.Horizontal);
+            int requiredClientHeight = _root.Padding.Vertical;
+            for (int row = 0; row < _root.RowCount; row++)
+            {
+                Control child = _root.GetControlFromPosition(0, row);
+                if (child == null)
+                {
+                    continue;
+                }
+
+                int preferredHeight;
+                if (ReferenceEquals(child, _grid))
+                {
+                    preferredHeight = _grid.MinimumSize.Height;
+                }
+                else
+                {
+                    if (_root.RowStyles[row].SizeType != SizeType.AutoSize)
+                    {
+                        continue;
+                    }
+                    preferredHeight = child.GetPreferredSize(new Size(
+                        Math.Max(0, contentWidth - child.Margin.Horizontal), 0)).Height;
+                }
+
+                requiredClientHeight += preferredHeight + child.Margin.Vertical;
+            }
+            return requiredClientHeight;
+        }
+
+        private void OnRootSizeChanged(object sender, EventArgs e)
+        {
+            UpdateContentMinimum();
+        }
+
+        private void UpdateContentMinimum()
+        {
+            if (_updatingContentMinimum)
+            {
+                return;
+            }
+
+            _updatingContentMinimum = true;
+            try
+            {
+                _root.AutoScrollMinSize = new Size(0, GetRequiredClientHeight());
+            }
+            finally
+            {
+                _updatingContentMinimum = false;
+            }
         }
 
         // ------------------------------------------------------------ building
@@ -181,16 +332,18 @@ namespace ExcelScheduleLink.Revit2024.UI
                 HeaderText = UserMessages.LayoutGridColumnHeader,
                 ReadOnly = true,
                 SortMode = DataGridViewColumnSortMode.NotSortable, // no sorting at all
-                AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells // header must not clip at high DPI
+                AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill
             };
+            label.DefaultCellStyle.WrapMode = DataGridViewTriState.True;
             DataGridViewTextBoxColumn width = new DataGridViewTextBoxColumn
             {
                 Name = WidthColumnName,
                 HeaderText = UserMessages.LayoutGridWidthHeader + " (" + LengthUnitHelper.Label(_unit) + ")",
                 SortMode = DataGridViewColumnSortMode.NotSortable,
-                AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill
+                AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells
             };
             width.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+            width.DefaultCellStyle.WrapMode = DataGridViewTriState.False;
             grid.Columns.Add(label);
             grid.Columns.Add(width);
 
@@ -203,18 +356,19 @@ namespace ExcelScheduleLink.Revit2024.UI
             // A TableLayoutPanel, not a GroupBox: GroupBox.AutoSize ignores docked
             // children, so its caption band clipped the last button row at high DPI.
             // A bold caption label plus spacing gives the same grouping visually.
-            // Two equal columns keep the widest button inside half the width.
+            // One full-width column holds the wrapping text rows; the buttons sit
+            // in their own two-column panel. A label spanning two percent columns
+            // is measured too tall, and the surplus stretched the last button row.
             TableLayoutPanel grid = new TableLayoutPanel
             {
-                ColumnCount = 2,
+                ColumnCount = 1,
                 RowCount = 5,
                 AutoSize = true,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 Dock = DockStyle.Fill,
                 Margin = new Padding(3, 2, 3, 8)
             };
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
             // Explicit row styles: without them the panel spreads rows evenly and
             // the buttons stretch to fill the leftover height.
             for (int r = 0; r < 5; r++) grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -227,7 +381,6 @@ namespace ExcelScheduleLink.Revit2024.UI
                 Margin = new Padding(3, 0, 3, 2)
             };
             grid.Controls.Add(caption, 0, 0);
-            grid.SetColumnSpan(caption, 2);
 
             Label note = new Label
             {
@@ -238,7 +391,6 @@ namespace ExcelScheduleLink.Revit2024.UI
                 Margin = new Padding(3, 0, 3, 6)
             };
             grid.Controls.Add(note, 0, 1);
-            grid.SetColumnSpan(note, 2);
 
             ToolTip tips = new ToolTip();
 
@@ -279,7 +431,16 @@ namespace ExcelScheduleLink.Revit2024.UI
                 Margin = new Padding(0, 7, 3, 3)
             }, 2, 0);
             grid.Controls.Add(targetRow, 0, 2);
-            grid.SetColumnSpan(targetRow, 2);
+
+            // No fixed pixel width: the full-width column wraps it like the note.
+            _comfortableWidth = new Label
+            {
+                AutoSize = true,
+                Visible = false,
+                ForeColor = SystemColors.GrayText,
+                Margin = new Padding(3, 0, 3, 6)
+            };
+            grid.Controls.Add(_comfortableWidth, 0, 3);
 
             Button fit = MakeButton(UserMessages.LayoutFitContent, OnFitContent);
             tips.SetToolTip(fit, UserMessages.LayoutFitContentTip);
@@ -290,53 +451,125 @@ namespace ExcelScheduleLink.Revit2024.UI
             Button fitTotal = MakeButton(UserMessages.LayoutFitToTotal, OnFitToTotal);
             tips.SetToolTip(fitTotal, UserMessages.LayoutFitToTotalTip);
 
-            grid.Controls.Add(fit, 0, 3);
-            grid.Controls.Add(distribute, 1, 3);
-            grid.Controls.Add(restore, 0, 4);
-            grid.Controls.Add(fitTotal, 1, 4);
+            // Two equal columns keep the widest button inside half the width.
+            TableLayoutPanel buttons = new TableLayoutPanel
+            {
+                ColumnCount = 2,
+                RowCount = 2,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0)
+            };
+            buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+            buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+            buttons.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            buttons.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            buttons.Controls.Add(fit, 0, 0);
+            buttons.Controls.Add(distribute, 1, 0);
+            buttons.Controls.Add(restore, 0, 1);
+            buttons.Controls.Add(fitTotal, 1, 1);
+            grid.Controls.Add(buttons, 0, 4);
 
             return grid;
         }
 
-        private Control BuildPolicyGroup(ColumnWidthMode current, out RadioButton keep, out RadioButton recalculate)
+        private Control BuildPolicyGroup(
+            ColumnWidthMode currentColumnMode, RowHeightMode currentRowMode,
+            out RadioButton columnKeep, out RadioButton columnRecalculate,
+            out RadioButton rowDefault, out RadioButton rowKeep)
         {
-            TableLayoutPanel inner = new TableLayoutPanel
+            TableLayoutPanel outer = new TableLayoutPanel
             {
                 ColumnCount = 1,
-                RowCount = 3,
+                RowCount = 2,
                 AutoSize = true,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 Dock = DockStyle.Fill,
                 Margin = new Padding(3, 2, 3, 6)
             };
-            inner.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-            for (int r = 0; r < 3; r++) inner.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            inner.Controls.Add(new Label
+            outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            outer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            outer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            TableLayoutPanel columnGroup = BuildPolicySubgroup(
+                UserMessages.LayoutPolicyGroup,
+                UserMessages.LayoutPolicyKeep,
+                UserMessages.LayoutPolicyRecalculate,
+                currentColumnMode == ColumnWidthMode.KeepManualWidths,
+                null,
+                out columnKeep, out columnRecalculate);
+            TableLayoutPanel rowGroup = BuildPolicySubgroup(
+                UserMessages.LayoutRowPolicyGroup,
+                UserMessages.RowModeFitToText,
+                UserMessages.RowModeKeepManual,
+                currentRowMode != RowHeightMode.KeepManualHeights,
+                UserMessages.LayoutRowPolicyHint,
+                out rowDefault, out rowKeep);
+
+            outer.Controls.Add(columnGroup, 0, 0);
+            outer.Controls.Add(rowGroup, 0, 1);
+            return outer;
+        }
+
+        private TableLayoutPanel BuildPolicySubgroup(
+            string title, string firstText, string secondText,
+            bool firstChecked, string hint,
+            out RadioButton first, out RadioButton second)
+        {
+            bool hasHint = !string.IsNullOrEmpty(hint);
+            int rowCount = hasHint ? 4 : 3;
+            TableLayoutPanel group = new TableLayoutPanel
             {
-                Text = UserMessages.LayoutPolicyGroup,
+                ColumnCount = 1,
+                RowCount = rowCount,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 0, 0, 4)
+            };
+            group.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            for (int r = 0; r < rowCount; r++)
+            {
+                group.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            }
+            group.Controls.Add(new Label
+            {
+                Text = title,
                 AutoSize = true,
                 Font = new Font(Font, FontStyle.Bold),
                 Margin = new Padding(3, 0, 3, 2)
             }, 0, 0);
 
-            keep = new RadioButton
+            first = new RadioButton
             {
-                Text = UserMessages.LayoutPolicyKeep,
+                Text = firstText,
                 AutoSize = true,
-                Checked = current == ColumnWidthMode.KeepManualWidths
+                Checked = firstChecked
             };
-            recalculate = new RadioButton
+            second = new RadioButton
             {
-                Text = UserMessages.LayoutPolicyRecalculate,
+                Text = secondText,
                 AutoSize = true,
-                Checked = current != ColumnWidthMode.KeepManualWidths
+                Checked = !firstChecked
             };
-            keep.CheckedChanged += OnPolicyChanged;
-            recalculate.CheckedChanged += OnPolicyChanged;
+            first.CheckedChanged += OnPolicyChanged;
+            second.CheckedChanged += OnPolicyChanged;
 
-            inner.Controls.Add(keep, 0, 1);
-            inner.Controls.Add(recalculate, 0, 2);
-            return inner;
+            group.Controls.Add(first, 0, 1);
+            group.Controls.Add(second, 0, 2);
+            if (hasHint)
+            {
+                group.Controls.Add(new Label
+                {
+                    Text = hint,
+                    AutoSize = true,
+                    ForeColor = SystemColors.GrayText,
+                    MaximumSize = new Size(560, 0),
+                    Margin = new Padding(3, 0, 3, 2)
+                }, 0, 3);
+            }
+            return group;
         }
 
         private Control BuildButtons(out Button applyClose)
@@ -433,7 +666,9 @@ namespace ExcelScheduleLink.Revit2024.UI
             _grid.Rows.Clear();
             for (int i = 0; i < _columnCount; i++)
             {
-                int index = _grid.Rows.Add(ColumnLabel(i), string.Empty);
+                int index = _grid.Rows.Add(
+                    UserMessages.LayoutColumnName(i, _columnHeadings),
+                    string.Empty);
                 DataGridViewRow row = _grid.Rows[index];
                 row.Tag = new RowState { ColumnIndex = i, Feet = feet[i] };
                 WriteCell(row);
@@ -441,26 +676,16 @@ namespace ExcelScheduleLink.Revit2024.UI
             _suppressEvents = false;
         }
 
-        /// <summary>Cosmetic label only (A, B, ... Z, AA, ...); identity is the Tag.</summary>
-        private static string ColumnLabel(int zeroBased)
-        {
-            string s = string.Empty;
-            int n = zeroBased;
-            do
-            {
-                s = (char)('A' + (n % 26)) + s;
-                n = n / 26 - 1;
-            } while (n >= 0);
-            return s;
-        }
-
         private void WriteCell(DataGridViewRow row)
         {
             RowState state = (RowState)row.Tag;
-            double display = LengthUnitHelper.FromFeet(state.Feet, _unit);
-            row.Cells[WidthColumnName].Value =
-                display.ToString("F" + LengthUnitHelper.Decimals(_unit), CultureInfo.CurrentCulture);
-            row.Cells[WidthColumnName].Style.BackColor = state.Invalid
+            DataGridViewCell cell = row.Cells[WidthColumnName];
+            cell.Value = FormatDisplay(state.Feet);
+            cell.ErrorText = state.Invalid
+                ? LengthUnitHelper.InvalidNumbersMessage(
+                    new[] { state.ColumnIndex }, _unit, _columnHeadings)
+                : string.Empty;
+            cell.Style.BackColor = state.Invalid
                 ? Color.MistyRose
                 : SystemColors.Window;
         }
@@ -497,16 +722,6 @@ namespace ExcelScheduleLink.Revit2024.UI
             return feet;
         }
 
-        private int InvalidCount()
-        {
-            int n = 0;
-            foreach (DataGridViewRow row in _grid.Rows)
-            {
-                if (((RowState)row.Tag).Invalid) n++;
-            }
-            return n;
-        }
-
         // ------------------------------------------------------------- handlers
 
         private void OnCellEndEdit(object sender, DataGridViewCellEventArgs e)
@@ -514,7 +729,6 @@ namespace ExcelScheduleLink.Revit2024.UI
             if (_suppressEvents || e.RowIndex < 0) return;
             DataGridViewRow row = _grid.Rows[e.RowIndex];
             RowState state = (RowState)row.Tag;
-            _sourceSnapshot = null;
             object value = row.Cells[WidthColumnName].Value;
             string text = value != null ? value.ToString().Trim() : string.Empty;
 
@@ -527,14 +741,32 @@ namespace ExcelScheduleLink.Revit2024.UI
             }
             if (!ok || double.IsNaN(parsed) || double.IsInfinity(parsed) || parsed <= 0.0)
             {
+                ClearFitContentFeedback();
                 state.Invalid = true;
                 WriteCell(row);
-                SetStatus(UserMessages.LayoutInvalidCell(state.ColumnIndex + 1, LengthUnitHelper.Label(_unit)), true);
+                SetStatus(LengthUnitHelper.InvalidNumbersMessage(
+                    new[] { state.ColumnIndex }, _unit, _columnHeadings), true);
                 return;
             }
 
+            double displayed;
+            string formatted = FormatDisplay(state.Feet);
+            bool displayedOk = double.TryParse(
+                formatted, NumberStyles.Float, CultureInfo.CurrentCulture, out displayed);
+            if (displayedOk && parsed == displayed)
+            {
+                state.Invalid = false;
+                _suppressEvents = true;
+                WriteCell(row);
+                _suppressEvents = false;
+                UpdateFitContentStatus();
+                return;
+            }
+
+            ClearFitContentFeedback();
             state.Feet = LengthUnitHelper.ToFeet(parsed, _unit);
             state.Invalid = false;
+            _sourceSnapshot = null;
             _suppressEvents = true;
             WriteCell(row);
             _suppressEvents = false;
@@ -546,24 +778,50 @@ namespace ExcelScheduleLink.Revit2024.UI
         {
             if (_fatalRegenerationFailure) return;
             if (_fitContent == null) return;
-            FitContentResult result = _fitContent();
-            if (result == null || result.Feet == null) return;
+            if (_grid.IsCurrentCellInEditMode)
+            {
+                _grid.EndEdit();
+            }
+            if (!ValidateBeforeApply()) return;
+
+            FitContentResult result = _fitContent(CurrentFeet());
+            if (result != null && result.FatalRegenerationFailure)
+            {
+                StopAfterFatalRegenerationFailure(result.UserMessage);
+                return;
+            }
+            if (result == null || !result.Success || result.Feet == null)
+            {
+                string message = result != null
+                    && !string.IsNullOrEmpty(result.UserMessage)
+                    ? result.UserMessage : UserMessages.LayoutFitContentReadFailed;
+                SetStatus(message, true);
+                MessageBox.Show(this, message, UserMessages.DialogTitle,
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
             _sourceSnapshot = null;
             SetAllFeet(result.Feet);
             MarkDirty(true);
-            if (result.UnresolvedDeficit > LayoutOps.Tolerance)
+            _fitContentDiagnostics = result.FixedTotal;
+            if (_fitContentDiagnostics == null)
             {
-                double inches = result.UnresolvedDeficit * LayoutMetrics.InchesPerFoot;
-                SetStatus(UserMessages.LayoutFitContentPartial(inches), false);
+                ClearFitContentFeedback();
             }
             else
             {
-                UpdateStatus();
+                SetComfortableWidthText(_fitContentDiagnostics.Stage
+                    == FitContentStage.Comfortable
+                    ? string.Empty
+                    : LengthUnitHelper.FitContentComfort(
+                        _fitContentDiagnostics, _unit));
             }
+            UpdateFitContentStatus();
         }
 
         private void OnDistributeEvenly(object sender, EventArgs e)
         {
+            ClearFitContentFeedback();
             _sourceSnapshot = null;
             double total = 0.0;
             foreach (double f in CurrentFeet()) total += f;
@@ -577,6 +835,11 @@ namespace ExcelScheduleLink.Revit2024.UI
             if (_fatalRegenerationFailure) return;
             if (_restoreExcel == null) return;
             ExcelWidthResult result = _restoreExcel();
+            if (result != null && result.FatalRegenerationFailure)
+            {
+                StopAfterFatalRegenerationFailure(result.UserMessage);
+                return;
+            }
             if (result == null || !result.Success)
             {
                 // Candidates and dirty state stay exactly as they were.
@@ -585,9 +848,10 @@ namespace ExcelScheduleLink.Revit2024.UI
                     UserMessages.DialogTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
+            ClearFitContentFeedback();
             SetAllFeet(result.Feet);
             _sourceSnapshot = result.SourceSnapshot;
-            MarkDirty(false); // widths changed, but the reload policy must not be touched
+            MarkDirty(false); // widths changed, but the reload policies must not be touched
             UpdateStatus();
         }
 
@@ -605,6 +869,7 @@ namespace ExcelScheduleLink.Revit2024.UI
 
             double targetFeet = LengthUnitHelper.ToFeet(target, _unit);
             FitToTotalResult result = LayoutOps.FitToTotalFeet(CurrentFeet(), targetFeet);
+            ClearFitContentFeedback();
             _sourceSnapshot = null;
             SetAllFeet(result.Feet);
             MarkDirty(true);
@@ -630,7 +895,7 @@ namespace ExcelScheduleLink.Revit2024.UI
             RadioButton rb = sender as RadioButton;
             if (rb != null && !rb.Checked) return; // only react to the newly checked one
             _dirty = true;
-            UpdateStatus();
+            UpdateFitContentStatus();
         }
 
         /// <summary>
@@ -646,30 +911,53 @@ namespace ExcelScheduleLink.Revit2024.UI
             if (!ValidateBeforeApply()) return;
 
             LayoutApplyResult result = _applyNow(
-                CurrentFeet(), CurrentPolicy(), _sourceSnapshot);
+                CurrentFeet(), CurrentPolicy(), CurrentRowPolicy(), _sourceSnapshot);
             if (result == null) return;
+            if (result.FatalRegenerationFailure)
+            {
+                StopAfterFatalRegenerationFailure(result.UserMessage);
+                return;
+            }
 
             if (result.Success)
             {
                 _dirty = false; // already in the model; closing needs no prompt
                 _sourceSnapshot = null;
-                SetStatus(result.UserMessage, false);
+                string appliedMessage = result.UserMessage;
+                string fitNotes = LengthUnitHelper.FitContentNotes(
+                    _fitContentDiagnostics, _unit, _columnHeadings);
+                if (!string.IsNullOrEmpty(fitNotes))
+                {
+                    appliedMessage += "\n\n" + fitNotes;
+                }
+                SetStatus(appliedMessage, false);
             }
             else
             {
+                HighlightInvalidColumns(result.InvalidColumns);
                 SetStatus(result.UserMessage, true);
                 MessageBox.Show(this, result.UserMessage, UserMessages.DialogTitle,
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                if (result.FatalRegenerationFailure)
-                {
-                    // Revit's document is no longer legal to read after a
-                    // regeneration failure. Close this dialog without asking
-                    // about unsaved candidates; the command must return too.
-                    _fatalRegenerationFailure = true;
-                    PrepareOutcome(LayoutDialogAction.Cancelled);
-                    DialogResult = DialogResult.Cancel;
-                    Close();
-                }
+            }
+        }
+
+        private void StopAfterFatalRegenerationFailure(string message)
+        {
+            // Revit's document is no longer legal to read after a regeneration
+            // failure. Close this dialog without asking about unsaved candidates;
+            // the command must return too.
+            _fatalRegenerationFailure = true;
+            try
+            {
+                PrepareOutcome(LayoutDialogAction.Cancelled);
+                SetStatus(message, true);
+                MessageBox.Show(this, message, UserMessages.DialogTitle,
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally
+            {
+                DialogResult = DialogResult.Cancel;
+                Close();
             }
         }
 
@@ -678,6 +966,13 @@ namespace ExcelScheduleLink.Revit2024.UI
             return _policyKeep.Checked
                 ? ColumnWidthMode.KeepManualWidths
                 : ColumnWidthMode.ApplyExcelWidths;
+        }
+
+        private RowHeightMode CurrentRowPolicy()
+        {
+            return _rowPolicyKeep.Checked
+                ? RowHeightMode.KeepManualHeights
+                : RowHeightMode.UseDefaultHeights;
         }
 
         private void OnApplyAndClose(object sender, EventArgs e)
@@ -767,13 +1062,22 @@ namespace ExcelScheduleLink.Revit2024.UI
 
         private bool ValidateBeforeApply()
         {
-            int invalid = InvalidCount();
-            if (invalid > 0)
+            if (_grid.IsCurrentCellInEditMode)
             {
-                SetStatus(UserMessages.LayoutInvalidCells(invalid), true);
-                return false;
+                _grid.EndEdit();
             }
-            return true;
+
+            List<int> invalid = new List<int>();
+            foreach (DataGridViewRow row in _grid.Rows)
+            {
+                RowState state = (RowState)row.Tag;
+                if (state.Invalid) invalid.Add(state.ColumnIndex);
+            }
+            if (invalid.Count == 0) return true;
+
+            SetStatus(LengthUnitHelper.InvalidNumbersMessage(
+                invalid.ToArray(), _unit, _columnHeadings), true);
+            return false;
         }
 
         private void PrepareOutcome(LayoutDialogAction action)
@@ -782,10 +1086,10 @@ namespace ExcelScheduleLink.Revit2024.UI
             {
                 Action = action,
                 CandidateFeet = CurrentFeet(),
-                ReloadPolicy = _policyKeep.Checked
-                    ? ColumnWidthMode.KeepManualWidths
-                    : ColumnWidthMode.ApplyExcelWidths,
-                SourceSnapshot = _sourceSnapshot
+                ReloadPolicy = CurrentPolicy(),
+                RowReloadPolicy = CurrentRowPolicy(),
+                SourceSnapshot = _sourceSnapshot,
+                FitContentDiagnostics = _fitContentDiagnostics
             };
         }
 
@@ -796,11 +1100,88 @@ namespace ExcelScheduleLink.Revit2024.UI
             Close();
         }
 
+        private static string[] NormalizeColumnHeadings(
+            IReadOnlyList<string> headings, int count)
+        {
+            string[] result = new string[count < 0 ? 0 : count];
+            if (headings == null || headings.Count != result.Length)
+            {
+                return result;
+            }
+            for (int i = 0; i < result.Length; i++)
+            {
+                result[i] = headings[i] ?? string.Empty;
+            }
+            return result;
+        }
+
+        private void HighlightInvalidColumns(int[] columns)
+        {
+            if (columns == null || columns.Length == 0) return;
+            foreach (DataGridViewRow row in _grid.Rows)
+            {
+                RowState state = (RowState)row.Tag;
+                if (Array.IndexOf(columns, state.ColumnIndex) < 0)
+                {
+                    continue;
+                }
+                DataGridViewCell cell = row.Cells[WidthColumnName];
+                cell.Style.BackColor = Color.MistyRose;
+                cell.ErrorText = LengthUnitHelper.InvalidNumbersMessage(
+                    new[] { state.ColumnIndex }, _unit, _columnHeadings);
+            }
+        }
+
+        private void ClearFitContentFeedback()
+        {
+            _fitContentDiagnostics = null;
+            SetComfortableWidthText(string.Empty);
+            UpdateContentMinimum();
+        }
+
+        // An empty estimate takes no row height: the label is hidden, not blank.
+        private void SetComfortableWidthText(string text)
+        {
+            if (_comfortableWidth == null)
+            {
+                return;
+            }
+            _comfortableWidth.Text = text ?? string.Empty;
+            _comfortableWidth.Visible = _comfortableWidth.Text.Length > 0;
+        }
+
+        private void UpdateFitContentStatus()
+        {
+            if (_fitContentDiagnostics == null)
+            {
+                UpdateStatus();
+                return;
+            }
+
+            string status;
+            bool warning = false;
+            if (_fitContentDiagnostics.Stage == FitContentStage.Comfortable)
+            {
+                status = UserMessages.LayoutTotalPrefix
+                    + FormatDisplay(_fitContentDiagnostics.ActualTotalFeet)
+                    + " " + LengthUnitHelper.Label(_unit);
+            }
+            else
+            {
+                status = LengthUnitHelper.FitContentNotes(
+                    _fitContentDiagnostics, _unit, _columnHeadings);
+                warning = _fitContentDiagnostics.Stage
+                    == FitContentStage.OutOfRange;
+            }
+            SetStatus(UserMessages.AppendLayoutRowPolicyNote(
+                status, CurrentRowPolicy()), warning);
+        }
+
         /// <summary>
         /// Marks the candidates as changed. <paramref name="presetKeep"/> switches
-        /// the reload policy to "keep" (Fit Content / Distribute / manual edits);
-        /// Restore Excel Widths passes false so the policy is left alone. The user
-        /// can still switch it back before applying.
+        /// the column reload policy to "keep" (Fit Content / Distribute / manual edits);
+        /// Restore Excel Widths passes false so the column policy is left alone. The
+        /// row policy is always left to the user's separate choice.
         /// </summary>
         private void MarkDirty(bool presetKeep)
         {
@@ -836,6 +1217,7 @@ namespace ExcelScheduleLink.Revit2024.UI
         {
             _status.Text = text;
             _status.ForeColor = warning ? Color.Firebrick : SystemColors.ControlText;
+            UpdateContentMinimum();
         }
     }
 }

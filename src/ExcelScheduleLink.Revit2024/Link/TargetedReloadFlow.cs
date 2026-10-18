@@ -1,4 +1,5 @@
 using Autodesk.Revit.DB;
+using Autodesk.Revit.UI;
 using ExcelScheduleLink.Contracts;
 
 namespace ExcelScheduleLink.Revit2024.Link
@@ -20,17 +21,38 @@ namespace ExcelScheduleLink.Revit2024.Link
     /// </summary>
     internal static class TargetedReloadFlow
     {
+        /// <summary>
+        /// Shows the reload outcome a caller still owes the user. Once the flow
+        /// dispatched to the current-table fallback, TryFallback has put the
+        /// workbook reason in its offer or refusal details and reported any
+        /// failure, or the user cancelled, so the original workbook outcome is
+        /// not shown again. Final-qualification warnings and fatal reporting
+        /// keep their existing handling.
+        /// </summary>
+        public static void ShowReloadOutcome(
+            TargetedReloadFlowResult flow, string title)
+        {
+            if (flow == null || flow.FallbackOffered)
+            {
+                return;
+            }
+            string text = UserMessages.ReloadOutcomeMessage(flow.Reload);
+            if (!string.IsNullOrEmpty(text))
+            {
+                TaskDialog.Show(title, text);
+            }
+        }
+
         public static TargetedReloadFlowResult Run(
             Document doc,
             ViewSchedule schedule,
             ReloadScope scope,
-            PendingLinkSettings pendingSettings,
             StyleIntegrityResult priorHint,
             bool rescanAfterUnsuccessfulFallback = true)
         {
             TargetedReloadFlowResult result = new TargetedReloadFlowResult();
             result.Reload = ReloadService.Reload(
-                doc, schedule, scope, pendingSettings, priorHint);
+                doc, schedule, scope, priorHint);
             if (result.Reload.IsFatalRegenerationFailure)
             {
                 result.FatalRegeneration = true;
@@ -45,7 +67,8 @@ namespace ExcelScheduleLink.Revit2024.Link
             if (result.FallbackOffered)
             {
                 result.Fallback =
-                    ScheduleRepairCoordinator.TryFallback(doc, schedule);
+                    ScheduleRepairCoordinator.TryFallback(
+                        doc, schedule, result.Reload.Detail);
                 if (result.Fallback != null
                     && result.Fallback.FatalRegenerationFailure)
                 {

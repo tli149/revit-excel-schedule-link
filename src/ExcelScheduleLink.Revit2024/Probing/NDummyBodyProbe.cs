@@ -49,7 +49,7 @@ namespace ExcelScheduleLink.Revit2024.Probing
 
         // ---------------------------------------------------------------- Setup
 
-        public static Result RunSetup(ExternalCommandData commandData, ref string message)
+        public static Result RunSetup(ExternalCommandData commandData)
         {
             UIApplication uiapp = commandData.Application;
             UIDocument uidoc = uiapp.ActiveUIDocument;
@@ -198,7 +198,6 @@ namespace ExcelScheduleLink.Revit2024.Probing
             catch (Exception ex)
             {
                 log.Add("[FAIL] setup exception: " + ex);
-                message = ex.Message;
             }
             Write(log);
 
@@ -216,7 +215,7 @@ namespace ExcelScheduleLink.Revit2024.Probing
 
         // -------------------------------------------------------------- Measure
 
-        public static Result RunMeasure(ExternalCommandData commandData, ref string message)
+        public static Result RunMeasure(ExternalCommandData commandData)
         {
             UIApplication uiapp = commandData.Application;
             UIDocument uidoc = uiapp.ActiveUIDocument;

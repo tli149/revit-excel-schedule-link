@@ -8,7 +8,7 @@ view and update it with one click when the workbook changes.
 
 ![Link Manager](docs/images/link-manager.png)
 
-> **Status: Pilot (0.9.4).** Works with **Autodesk Revit 2024 only**. Try it on
+> **Status: Pilot (0.10.0).** Works with **Autodesk Revit 2024 only**. Try it on
 > a copy of a project first, keep backups, and check results before you save or
 > sync. This is a personal project maintained in spare time; there is no
 > guaranteed support.
@@ -16,23 +16,36 @@ view and update it with one click when the workbook changes.
 ## What it does
 
 - **Link Excel** — choose an `.xlsx` file and a worksheet, with an optional cell
-  range. You get a schedule view that you can place on any sheet, print, and
-  export to PDF.
+  range. The first widths are calculated from Excel and the displayed text with
+  a fixed 1.5 factor; there is no scale question. You get a schedule view that
+  you can place on any sheet, print, and export to PDF.
 - **Reload** — edit and save the workbook, then click once to rebuild the table
   in place. Sheet placements stay where they are.
 - **Keeps Excel's look for numbers** — you keep thousands separators,
   percentages, dates, leading zeros, units like `12.3 A` or `1234 CFM`,
   fractions, and merged cells.
-- **Column width tools** — use Fit Content, Distribute Evenly, Restore Excel
-  Widths, or enter exact widths in mm.
-- **Link Manager** — see every link in the model in one list, with its status,
-  reload controls, and per-link settings.
+- **Column Widths and row heights** — use Fit Content, Distribute Evenly, Restore
+  Excel Widths, Fit to Total, or enter exact widths in project units. With **Fit
+  rows to text on reload**, the add-in sets header-row heights on Link, Reload,
+  and every Column Widths Apply, including the ribbon Quick Layout tools. It can
+  make rows taller or shorter. **Keep current row heights** disables text
+  fitting; Apply leaves current heights alone, while Reload restores captured
+  heights where possible and reports rows Revit could not keep. Wrapped text may
+  still be hidden.
+- **Link Manager** — see every link in the model in one six-column register,
+  with source and integrity status, reload controls, and repair controls. Layout
+  and reload policies are managed in Column Widths; Manager has no settings
+  editor.
 - **Read-only and careful** — the add-in never writes to your workbook. It can
-  read a file while it is open in Excel, reads everything before touching the
-  model, and asks before contacting an unknown network server.
+  read a file while it is open in Excel. Workbook-based actions read the needed
+  data before touching the model; Fit Content and Distribute use the current
+  rendered table, while Restore Excel Widths reads the linked worksheet. It
+  asks before contacting an unknown network server.
 
-Not included (yet): fonts, colors, borders and row heights from Excel,
-write-back to Excel, automatic reload on file change, `.xls`/`.csv`.
+Not included (yet): copying fonts, colors, borders or row heights from Excel,
+write-back to Excel, automatic reload on file change, `.xls`/`.csv`. Row heights
+can be estimated from displayed text by the add-in when Fit rows to text is
+selected; Excel's own row heights are not copied.
 
 ## Who it is for
 
@@ -42,7 +55,7 @@ calculations in Excel and need them on Revit sheets.
 ## Install
 
 1. Go to **[Releases](../../releases)** and download
-   `ExcelScheduleLink_v0.9.4.zip` from **Assets**. The green **Code → Download ZIP**
+   `ExcelScheduleLink_v0.10.0.zip` from **Assets**. The green **Code → Download ZIP**
    button gives you the source code, not the add-in.
 2. Right-click the ZIP → **Properties** → tick **Unblock** → **OK**.
 3. Extract it and run `scripts\install-revit2024.ps1` (right-click → **Run

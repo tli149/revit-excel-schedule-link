@@ -4,14 +4,6 @@ using ExcelScheduleLink.Contracts;
 
 namespace ExcelScheduleLink.Revit2024.Link
 {
-    /// <summary>Settings supplied by Link Manager for one atomic reload action.</summary>
-    internal sealed class PendingLinkSettings
-    {
-        public ColumnWidthMode ColumnWidthMode;
-        public RowHeightMode RowHeightMode;
-        public double WidthScale;
-    }
-
     /// <summary>
     /// All data needed to choose and present a single-link decision. It contains
     /// no model mutation; the reload service creates it after the source snapshot

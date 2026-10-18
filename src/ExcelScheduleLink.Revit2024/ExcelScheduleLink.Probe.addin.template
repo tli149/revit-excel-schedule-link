@@ -81,17 +81,6 @@
     <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
   </AddIn>
   <AddIn Type="Command">
-    <Name>ESL Probe Settings Save Failure</Name>
-    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
-    <AddInId>ff334f6f-2086-4a15-910e-acdfea820d58</AddInId>
-    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeSaveFailureCommand</FullClassName>
-    <Text>ESL Probe: Settings Save Failure</Text>
-    <Description>Opens the Link Manager with settings saving forced to fail (a transaction is held open), so the settings-save failure regression can be checked without a second worksharing user. Rolls back; changes nothing.</Description>
-    <VisibilityMode>AlwaysVisible</VisibilityMode>
-    <VendorId>ESL0</VendorId>
-    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
-  </AddIn>
-  <AddIn Type="Command">
     <Name>ESL Probe Worksharing Status</Name>
     <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
     <AddInId>d398d49d-c0a2-4e58-87f7-917cc1a30762</AddInId>
@@ -241,6 +230,39 @@
     <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeFailNextRegenerationCommand</FullClassName>
     <Text>ESL Probe: Break Next Regeneration</Text>
     <Description>Arms a one-shot private marker treated identically to Revit's RegenerationFailedException at the next post-mutation style scan; the native exception cannot be constructed by the probe. Close the model without saving after the fatal message.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe Break Rolled-Back Read</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>5e64b051-8a5e-4cc2-a1ce-1790888f31af</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeFailRolledBackReadCommand</FullClassName>
+    <Text>ESL Probe: Break Rolled-Back Read</Text>
+    <Description>Arms the same one-shot private regeneration-failure marker at the next or the second rolled-back style read, outside any model mutation, so the fatal reaches the command or dialog boundary as an exception. Close the model without saving after the fatal message.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe Width and Height Round Trip</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>e4294c41-5a43-4bb7-9812-4d67ecaedc4b</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeWidthRoundTripCommand</FullClassName>
+    <Text>ESL Probe: Width and Height Round Trip</Text>
+    <Description>Measures native feet and logical-pixel width and height round trips on a temporary method-B schedule; the single probe transaction reports its observed rollback status.</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <VendorId>ESL0</VendorId>
+    <VendorDescription>ExcelScheduleLink Probe</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>ESL Probe Row Text Fit Calibration</Name>
+    <Assembly>__ESL_DEPLOY_DIR__\ExcelScheduleLink.Revit2024.dll</Assembly>
+    <AddInId>bb243ffa-0b25-45f6-a85b-948c402f8a36</AddInId>
+    <FullClassName>ExcelScheduleLink.Revit2024.Commands.ProbeRowTextFitCommand</FullClassName>
+    <Text>ESL Probe: Row Text Fit Calibration</Text>
+    <Description>Creates a visible calibration table in a disposable model. This change is committed; close without saving afterwards.</Description>
     <VisibilityMode>AlwaysVisible</VisibilityMode>
     <VendorId>ESL0</VendorId>
     <VendorDescription>ExcelScheduleLink Probe</VendorDescription>

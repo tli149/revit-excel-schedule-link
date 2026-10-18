@@ -7,7 +7,7 @@ using ExcelScheduleLink.Revit2024.Link;
 namespace ExcelScheduleLink.Revit2024.UI
 {
     /// <summary>
-    /// Worksheet / range / width-scale picker shown after the workbook is
+    /// Worksheet / range picker shown after the workbook is
     /// selected. Everything (including the button row) lives in a single
     /// TableLayoutPanel so there is no Dock ordering ambiguity, and the form
     /// auto-sizes to its content so no row can be clipped on any DPI. All
@@ -18,12 +18,12 @@ namespace ExcelScheduleLink.Revit2024.UI
     {
         private readonly ComboBox _sheetCombo;
         private readonly TextBox _rangeText;
-        private readonly NumericUpDown _widthScale;
+        private readonly TableLayoutPanel _layout;
+        private readonly int _sheetRow;
 
         public LinkExcelDialog(
             string workbookPath,
             IReadOnlyList<string> sheetNames,
-            double defaultWidthScale,
             string preferredSheetName,
             string preferredRangeAddress)
         {
@@ -98,7 +98,9 @@ namespace ExcelScheduleLink.Revit2024.UI
                     }
                 }
             }
+            _sheetRow = row;
             layout.Controls.Add(_sheetCombo, 1, row++);
+            _sheetCombo.SizeChanged += delegate { FitSheetRow(); };
 
             // Cell range
             layout.Controls.Add(MakeLabel(UserMessages.LinkDialogRangeLabel), 0, row);
@@ -119,31 +121,6 @@ namespace ExcelScheduleLink.Revit2024.UI
                 Margin = new Padding(3, 0, 3, 8)
             };
             layout.Controls.Add(rangeHint, 1, row++);
-
-            // Column width scale
-            layout.Controls.Add(MakeLabel(UserMessages.LinkDialogWidthScaleLabel), 0, row);
-            _widthScale = new NumericUpDown
-            {
-                DecimalPlaces = 2,
-                Increment = 0.1M,
-                Minimum = 0.2M,
-                Maximum = 10.0M,
-                Width = 90,
-                Anchor = AnchorStyles.Left,
-                Value = ClampScale(defaultWidthScale),
-                Margin = new Padding(3, 3, 3, 0)
-            };
-            layout.Controls.Add(_widthScale, 1, row++);
-
-            // Width scale hint
-            Label scaleHint = new Label
-            {
-                Text = UserMessages.LinkDialogWidthScaleHint,
-                AutoSize = true,
-                ForeColor = SystemColors.GrayText,
-                Margin = new Padding(3, 0, 3, 10)
-            };
-            layout.Controls.Add(scaleHint, 1, row++);
 
             // Buttons (own row, second column, right-aligned)
             FlowLayoutPanel buttons = new FlowLayoutPanel
@@ -173,8 +150,41 @@ namespace ExcelScheduleLink.Revit2024.UI
             layout.Controls.Add(buttons, 1, row);
 
             Controls.Add(layout);
+            _layout = layout;
             AcceptButton = okButton;
             CancelButton = cancelButton;
+        }
+
+        protected override void OnLoad(EventArgs e)
+        {
+            FitSheetRow();
+            base.OnLoad(e);
+        }
+
+        /// <summary>
+        /// A drop-down list's real height is set by Windows when its window is
+        /// created, and at high DPI it is taller than the height the layout
+        /// reserves for it, so the range box below would overlap it. The
+        /// worksheet row is therefore sized from the real height, now and
+        /// whenever that height changes.
+        /// </summary>
+        private void FitSheetRow()
+        {
+            if (_layout == null)
+            {
+                return;
+            }
+            while (_layout.RowStyles.Count <= _sheetRow)
+            {
+                _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            }
+            int needed = _sheetCombo.Height + _sheetCombo.Margin.Vertical;
+            Control label = _layout.GetControlFromPosition(0, _sheetRow);
+            if (label != null)
+            {
+                needed = Math.Max(needed, label.PreferredSize.Height + label.Margin.Vertical);
+            }
+            _layout.RowStyles[_sheetRow] = new RowStyle(SizeType.Absolute, needed);
         }
 
         private static Label MakeLabel(string text)
@@ -186,13 +196,6 @@ namespace ExcelScheduleLink.Revit2024.UI
                 Anchor = AnchorStyles.Left,
                 Margin = new Padding(3, 6, 8, 0)
             };
-        }
-
-        private static decimal ClampScale(double value)
-        {
-            if (double.IsNaN(value) || value < 0.2) return 1.0M;
-            if (value > 10.0) return 10.0M;
-            return (decimal)value;
         }
 
         public string SelectedSheetName
@@ -208,11 +211,6 @@ namespace ExcelScheduleLink.Revit2024.UI
                 string text = _rangeText.Text != null ? _rangeText.Text.Trim() : string.Empty;
                 return text.Length == 0 ? null : text;
             }
-        }
-
-        public double WidthScale
-        {
-            get { return (double)_widthScale.Value; }
         }
     }
 }

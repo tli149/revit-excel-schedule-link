@@ -21,11 +21,14 @@ namespace ExcelScheduleLink.Revit2024.Link
     internal static class ScheduleRepairCoordinator
     {
         public static RepairAttemptOutcome TryFallback(
-            Document doc, ViewSchedule schedule)
+            Document doc, ViewSchedule schedule, string unavailableReason)
         {
             if (!CanStartExplicitRepair(doc, schedule, out string refusal))
             {
-                TaskDialog.Show(UserMessages.DialogTitle, refusal);
+                TaskDialog refusalDialog = new TaskDialog(UserMessages.DialogTitle);
+                refusalDialog.MainInstruction = refusal;
+                AddReason(refusalDialog, unavailableReason);
+                refusalDialog.Show();
                 return Failed(refusal);
             }
 
@@ -35,6 +38,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                 + (doc.IsDetached
                     ? "\n\n" + UserMessages.DetachedRepairSentence
                     : string.Empty);
+            AddReason(dialog, unavailableReason);
             dialog.AllowCancellation = true;
             dialog.CommonButtons = TaskDialogCommonButtons.Cancel;
             dialog.AddCommandLink(
@@ -58,11 +62,13 @@ namespace ExcelScheduleLink.Revit2024.Link
                 ScheduleRepairService.RebuildFromCurrentTable(doc, schedule);
             if (repair == null || !repair.Success)
             {
-                if (repair != null && !string.IsNullOrEmpty(repair.Detail))
-                {
-                    TaskDialog.Show(UserMessages.DialogTitle, repair.Detail);
-                }
-                return repair ?? Failed(UserMessages.FallbackPostRepairFailed);
+                RepairAttemptOutcome failed = repair
+                    ?? Failed(UserMessages.FallbackSnapshotFailedInstruction);
+                TaskDialog.Show(UserMessages.DialogTitle,
+                    string.IsNullOrEmpty(failed.Detail)
+                        ? UserMessages.FallbackSnapshotFailedInstruction
+                        : failed.Detail);
+                return failed;
             }
 
             StyleIntegrityResult after =
@@ -206,7 +212,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                 }
 
                 TargetedReloadFlowResult flow = TargetedReloadFlow.Run(
-                    doc, schedule, ReloadScope.SingleLink, null, prior);
+                    doc, schedule, ReloadScope.SingleLink, prior);
                 ReloadOutcome reload = flow.Reload;
                 if (flow.FatalRegeneration)
                 {
@@ -230,6 +236,18 @@ namespace ExcelScheduleLink.Revit2024.Link
                     {
                         outcome.Details.Add(
                             UserMessages.RepairFailedPostRepairScan(schedule.Name));
+                    }
+                    if (flow.FinalHealthy)
+                    {
+                        string details = UserMessages.AppendRenderNotes(
+                            UserMessages.ReloadColumnCountNote(reload),
+                            0, 0, false, false, 0,
+                            reload.RowHeightsRejected, reload.ScheduleName,
+                            rowsMayHideText: reload.RowsMayHideText);
+                        if (!string.IsNullOrEmpty(details))
+                        {
+                            outcome.Details.Add(details);
+                        }
                     }
                 }
                 else if (reload.IsWorkbookUnavailable)
@@ -348,7 +366,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                         doc, schedule.Id, out owner);
                     ownedByOtherUser = status == CheckoutStatus.OwnedByOtherUser;
                 }
-                catch (Exception)
+                catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
                 {
                     // The API documents this value as a local advisory. If it
                     // cannot be read, the transaction remains authoritative.
@@ -389,6 +407,14 @@ namespace ExcelScheduleLink.Revit2024.Link
                 Detail = "Repair was declined.",
                 ConsentDeclined = true
             };
+        }
+
+        private static void AddReason(TaskDialog dialog, string reason)
+        {
+            if (!string.IsNullOrEmpty(reason))
+            {
+                dialog.ExpandedContent = reason;
+            }
         }
     }
 }

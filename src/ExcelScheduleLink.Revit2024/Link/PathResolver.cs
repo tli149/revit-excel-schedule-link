@@ -322,7 +322,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                 return RelativePathPolicy.IsFileSystemPath(doc.PathName)
                     ? doc.PathName : null;
             }
-            catch (Exception)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 return null;
             }
@@ -343,7 +343,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                     ? "NO FILE-SYSTEM ANCHOR (unsaved/cloud)"
                     : "MODEL FILE FOLDER";
             }
-            catch (Exception)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 return "NO FILE-SYSTEM ANCHOR (unavailable)";
             }

@@ -1,4 +1,4 @@
-# Excel Schedule Link 0.9.4 (Pilot) — for Autodesk Revit 2024
+# Excel Schedule Link 0.10.0 (Pilot) — for Autodesk Revit 2024
 
 This package shows an Excel worksheet inside Revit as a schedule view and lets
 you reload it with one click when the workbook changes.

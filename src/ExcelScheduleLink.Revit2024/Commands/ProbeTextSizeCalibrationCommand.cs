@@ -31,7 +31,6 @@ namespace ExcelScheduleLink.Revit2024.Commands
             catch (Exception ex)
             {
                 TaskDialog.Show(Title, "The linked schedule could not be selected.\n\n" + ex);
-                message = ex.Message;
                 return Result.Failed;
             }
             if (schedule == null)
@@ -51,7 +50,6 @@ namespace ExcelScheduleLink.Revit2024.Commands
             {
                 TaskDialog.Show(Title,
                     "The text-size calibration report could not be written.\n\n" + ex);
-                message = ex.Message;
                 return Result.Failed;
             }
 

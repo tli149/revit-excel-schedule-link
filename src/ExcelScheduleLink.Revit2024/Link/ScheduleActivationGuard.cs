@@ -58,7 +58,7 @@ namespace ExcelScheduleLink.Revit2024.Link
             }
 
             TargetedReloadFlowResult flow = TargetedReloadFlow.Run(
-                uidoc.Document, schedule, ReloadScope.SingleLink, null, initial,
+                uidoc.Document, schedule, ReloadScope.SingleLink, initial,
                 false);
             ReloadOutcome reload = flow.Reload;
             if (flow.FatalRegeneration)
@@ -77,8 +77,8 @@ namespace ExcelScheduleLink.Revit2024.Link
                         UserMessages.FallbackPostRepairFailed);
                     return false;
                 }
-                TaskDialog.Show(UserMessages.DialogTitle,
-                    UserMessages.ReloadOutcomeMessage(reload));
+                TargetedReloadFlow.ShowReloadOutcome(
+                    flow, UserMessages.DialogTitle);
                 return true;
             }
 
@@ -92,13 +92,8 @@ namespace ExcelScheduleLink.Revit2024.Link
                 return flow.FinalHealthy;
             }
 
-            if (!flow.FallbackOffered
-                && reload.Kind != ReloadResultKind.Cancelled
-                && !string.IsNullOrEmpty(reload.Detail))
-            {
-                TaskDialog.Show(UserMessages.DialogTitle,
-                    UserMessages.ReloadOutcomeMessage(reload));
-            }
+            TargetedReloadFlow.ShowReloadOutcome(
+                flow, UserMessages.DialogTitle);
             return false;
         }
     }

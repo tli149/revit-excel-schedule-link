@@ -1,5 +1,4 @@
 ﻿using System.Collections.Generic;
-using System;
 using Autodesk.Revit.DB;
 using ExcelScheduleLink.Contracts;
 
@@ -17,26 +16,12 @@ namespace ExcelScheduleLink.Revit2024.Link
         public bool IsV2;
         public string StatusDisplay = string.Empty;
         public string RangeText = string.Empty;
-        public double WidthScale = 1.0;
-        public ColumnWidthMode ColumnWidthMode = ColumnWidthMode.ApplyExcelWidths;
-        public RowHeightMode RowHeightMode = RowHeightMode.ApplyExcelHeights;
         public StyleIntegrityResult IntegrityResult;
     }
 
-    internal sealed class SettingsSaveOutcome
-    {
-        public bool Success;
-        public bool TransactionStarted;
-        public bool RollbackVerified;
-        public bool FatalRegenerationFailure;
-        public string Detail = string.Empty;
-    }
-
     /// <summary>
-    /// UI-free operations for the Link Manager: enumerating links and persisting
-    /// per-link settings. Settings are written to extensible storage only; they
-    /// take effect on the NEXT reload (no re-render here), keeping this fast and
-    /// the model untouched apart from the stored entity.
+    /// UI-free operations for the Link Manager: enumerating linked schedules and
+    /// their resolved state.
     /// </summary>
     internal static class LinkManagerService
     {
@@ -79,10 +64,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                         ? info.AbsolutePath
                         : info.RelativePath,
                     SourceFound = resolution != null && resolution.IsResolved,
-                    RangeText = info.RangeMode == RangeMode.Explicit ? info.RangeAddress : "(used range)",
-                    WidthScale = info.WidthScale,
-                    ColumnWidthMode = info.ColumnWidthMode,
-                    RowHeightMode = info.RowHeightMode
+                    RangeText = info.RangeMode == RangeMode.Explicit ? info.RangeAddress : "(used range)"
                 };
                 if (integrityResults != null)
                 {
@@ -132,127 +114,6 @@ namespace ExcelScheduleLink.Revit2024.Link
                 rows.Add(row);
             }
             return rows;
-        }
-
-        /// <summary>
-        /// Persists the layout settings for one link. Loads the current entity,
-        /// updates only the three settings fields, and saves it back inside a
-        /// transaction. Other fields and the schedule content are untouched.
-        /// </summary>
-        public static SettingsSaveOutcome SaveSettings(
-            Document doc, ElementId scheduleId,
-            ColumnWidthMode columnWidthMode, RowHeightMode rowHeightMode, double widthScale,
-            bool allowLegacyMigration)
-        {
-            ViewSchedule schedule = doc.GetElement(scheduleId) as ViewSchedule;
-            if (schedule == null)
-            {
-                return Failed(UserMessages.ManagerLinkedScheduleUnavailable, false, false);
-            }
-            ExcelLinkStorage storage = ExcelLinkSchema.LoadAny(schedule);
-            if (storage == null || storage.Info == null)
-            {
-                return Failed(UserMessages.LinkStorageNotAvailable, false, false);
-            }
-
-            ModelMutationResult<bool> mutation = ModelMutation.Run<bool>(
-                doc,
-                "Edit Excel Link Settings",
-                delegate (ModelMutationContext context)
-                {
-                    ModelMutationLinkLoadResult loaded =
-                        context.LoadV2Link(schedule, allowLegacyMigration);
-                    if (!loaded.IsLoaded)
-                    {
-                        if (loaded.Status == ModelMutationLinkLoadStatus.LegacyMigrationRefused
-                            || loaded.Status == ModelMutationLinkLoadStatus.LegacyMigrationFailed)
-                        {
-                            context.Abort(UserMessages.LegacyLinkUpgradeFailed);
-                            return false;
-                        }
-                        if (loaded.Status == ModelMutationLinkLoadStatus.StorageUnavailable)
-                        {
-                            context.Abort(UserMessages.LinkStorageNotAvailable);
-                            return false;
-                        }
-                        throw new InvalidOperationException(
-                            UserMessages.SchemaV2UnavailableAfterMigration);
-                    }
-
-                    ExcelLinkInfo info = loaded.Info;
-                    info.ColumnWidthMode = columnWidthMode;
-                    info.RowHeightMode = rowHeightMode;
-                    info.WidthScale = widthScale;
-                    ExcelLinkSchema.SaveV2(schedule, info);
-                    return true;
-                });
-
-            if (mutation.Status == ModelMutationStatus.Committed)
-            {
-                return new SettingsSaveOutcome
-                {
-                    Success = true,
-                    TransactionStarted = mutation.TransactionStarted
-                };
-            }
-            if (mutation.Status == ModelMutationStatus.FatalRegeneration)
-            {
-                return Failed(
-                    UserMessages.RegenerationFailure,
-                    mutation.RollbackVerified,
-                    mutation.TransactionStarted,
-                    true);
-            }
-            if (mutation.Status == ModelMutationStatus.NotStarted)
-            {
-                return Failed(
-                    UserMessages.SettingsTransactionNotStarted,
-                    mutation.RollbackVerified,
-                    mutation.TransactionStarted);
-            }
-            if (mutation.Status == ModelMutationStatus.StartThrew)
-            {
-                Exception exception = mutation.Exception ?? new InvalidOperationException();
-                return Failed(
-                    exception.ToString(),
-                    mutation.RollbackVerified,
-                    mutation.TransactionStarted);
-            }
-            if (mutation.Status == ModelMutationStatus.Aborted)
-            {
-                return Failed(
-                    mutation.AbortReason,
-                    mutation.RollbackVerified,
-                    mutation.TransactionStarted);
-            }
-            if (mutation.Status == ModelMutationStatus.CommitNotCommitted)
-            {
-                return Failed(
-                    UserMessages.SettingsTransactionReturnedStatus(
-                        mutation.CommitStatus.Value.ToString()),
-                    mutation.RollbackVerified,
-                    mutation.TransactionStarted);
-            }
-
-            Exception failure = mutation.Exception ?? new InvalidOperationException();
-            return Failed(
-                failure.ToString(),
-                mutation.RollbackVerified,
-                mutation.TransactionStarted);
-        }
-
-        private static SettingsSaveOutcome Failed(
-            string detail, bool rollbackVerified, bool transactionStarted,
-            bool fatalRegenerationFailure = false)
-        {
-            return new SettingsSaveOutcome
-            {
-                Success = false,
-                TransactionStarted = transactionStarted,
-                RollbackVerified = rollbackVerified,
-                FatalRegenerationFailure = fatalRegenerationFailure,
-                Detail = detail ?? string.Empty
-            };
         }
     }
 }

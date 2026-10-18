@@ -100,9 +100,9 @@ namespace ExcelScheduleLink.Revit2024.Link
                         outcome.Detail = "The document was not modifiable after the read transaction started.";
                         return outcome;
                     }
-                    outcome.Snapshot = CaptureSnapshot(schedule);
+                    outcome.Snapshot = CaptureSnapshotInOpenTransaction(schedule);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
                 {
                     outcome.Snapshot = null;
                     outcome.Detail = ex.GetType().Name + ": " + ex.Message;
@@ -275,7 +275,8 @@ namespace ExcelScheduleLink.Revit2024.Link
                 mutation.TransactionStarted);
         }
 
-        private static HeaderTableSnapshot CaptureSnapshot(ViewSchedule schedule)
+        internal static HeaderTableSnapshot CaptureSnapshotInOpenTransaction(
+            ViewSchedule schedule)
         {
             TableSectionData section =
                 schedule.GetTableData().GetSectionData(SectionType.Header);
@@ -303,6 +304,8 @@ namespace ExcelScheduleLink.Revit2024.Link
                 for (int columnOffset = 0; columnOffset < columns; columnOffset++)
                 {
                     int column = snapshot.FirstColumnNumber + columnOffset;
+                    // The probe injector fails whichever capture runs next: the
+                    // current-table read or the row fitter's preparation read.
                     if (DebugCurrentTableCaptureFailureInjector.ConsumeNextCaptureFailure())
                     {
                         throw new InvalidOperationException(

@@ -141,6 +141,46 @@ namespace ExcelScheduleLink.Revit2024.Link
 
     internal static class ModelMutation
     {
+        private static long _committedCount;
+        private static long _fatalRegenerationCount;
+
+        /// <summary>
+        /// The number of transactions committed through Run in this process.
+        /// Revit undoes every transaction a command committed when it returns
+        /// Failed or Cancelled, so FatalRegenerationBoundary compares this count
+        /// to tell whether a command already committed. Revit API calls run on
+        /// one thread.
+        /// </summary>
+        internal static long CommittedCount { get { return _committedCount; } }
+
+        /// <summary>
+        /// A generation for fatal regenerations recorded in this process.
+        /// Consumers only compare it, so a double increment is harmless.
+        /// </summary>
+        internal static long FatalRegenerationCount { get { return _fatalRegenerationCount; } }
+
+        internal static void RecordFatalRegeneration()
+        {
+            _fatalRegenerationCount++;
+        }
+
+        /// <summary>
+        /// The one definition of a fatal regeneration: Revit's
+        /// RegenerationFailedException or the probe's stand-in for it. A fatal
+        /// inside a mutation reaches Run, which maps it to
+        /// <see cref="ModelMutationStatus.FatalRegeneration"/>. A fatal in a
+        /// standalone rolled-back read transaction is rolled back there and
+        /// propagates to the entry point, where FatalRegenerationBoundary
+        /// handles it. Either way only cleanup may run, with no further document
+        /// reads. A catch-all around a Revit read filters it out with
+        /// <c>when (!ModelMutation.IsFatalRegeneration(ex))</c>.
+        /// </summary>
+        internal static bool IsFatalRegeneration(Exception ex)
+        {
+            return ex is Autodesk.Revit.Exceptions.RegenerationFailedException
+                || ex is RegenerationFailureProbeException;
+        }
+
         public static ModelMutationResult<T> Run<T>(
             Document doc,
             string transactionName,
@@ -155,15 +195,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                 {
                     result.StartStatus = transaction.Start();
                 }
-                catch (Autodesk.Revit.Exceptions.RegenerationFailedException)
-                {
-                    throw;
-                }
-                catch (RegenerationFailureProbeException)
-                {
-                    throw;
-                }
-                catch (Exception ex)
+                catch (Exception ex) when (!IsFatalRegeneration(ex))
                 {
                     result.Status = ModelMutationStatus.StartThrew;
                     result.Exception = ex;
@@ -201,20 +233,14 @@ namespace ExcelScheduleLink.Revit2024.Link
                     return result;
                 }
 
+                _committedCount++;
                 result.Status = ModelMutationStatus.Committed;
                 result.Value = value;
                 return result;
             }
-            catch (Autodesk.Revit.Exceptions.RegenerationFailedException ex)
+            catch (Exception ex) when (IsFatalRegeneration(ex))
             {
-                result.Status = ModelMutationStatus.FatalRegeneration;
-                result.Exception = ex;
-                result.RollbackStatus =
-                    TransactionRollback.RollBackIfStarted(transaction);
-                return result;
-            }
-            catch (RegenerationFailureProbeException ex)
-            {
+                RecordFatalRegeneration();
                 result.Status = ModelMutationStatus.FatalRegeneration;
                 result.Exception = ex;
                 result.RollbackStatus =
@@ -261,15 +287,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                 }
                 transaction.SetFailureHandlingOptions(failureOptions);
             }
-            catch (Autodesk.Revit.Exceptions.RegenerationFailedException)
-            {
-                throw;
-            }
-            catch (RegenerationFailureProbeException)
-            {
-                throw;
-            }
-            catch (Exception)
+            catch (Exception ex) when (!IsFatalRegeneration(ex))
             {
                 // Failure-handling setup is best effort. The transaction result
                 // still decides whether the mutation may be reported as success.

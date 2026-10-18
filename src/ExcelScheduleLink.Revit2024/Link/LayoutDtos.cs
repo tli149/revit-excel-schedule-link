@@ -1,4 +1,5 @@
 using ExcelScheduleLink.Contracts;
+using ExcelScheduleLink.Layout;
 
 namespace ExcelScheduleLink.Revit2024.Link
 {
@@ -9,9 +10,34 @@ namespace ExcelScheduleLink.Revit2024.Link
     /// </summary>
     internal sealed class FitContentResult
     {
+        public bool Success;
+        public bool FatalRegenerationFailure;
+        public string UserMessage = string.Empty;
         public double[] Feet;
-        /// <summary>Feet a merged span still needs but could not get (columns at Max).</summary>
-        public double UnresolvedDeficit;
+        public FixedTotalFitResult FixedTotal;
+        public string[] ColumnHeadings;
+
+        public static FitContentResult Failed(string message)
+        {
+            return new FitContentResult
+            {
+                Success = false,
+                UserMessage = message,
+                Feet = null,
+                FixedTotal = null
+            };
+        }
+
+        public static FitContentResult RegenerationFailed()
+        {
+            return new FitContentResult
+            {
+                Success = false,
+                FatalRegenerationFailure = true,
+                UserMessage = UserMessages.RegenerationFailure,
+                Feet = null
+            };
+        }
     }
 
     /// <summary>Outcome of applying candidate column widths to a linked schedule.</summary>
@@ -49,6 +75,7 @@ namespace ExcelScheduleLink.Revit2024.Link
     internal sealed class ExcelWidthResult
     {
         public bool Success;
+        public bool FatalRegenerationFailure;
         public double[] Feet;        // set on success (scaled + clamped)
         public string UserMessage;   // set on failure
         public LayoutSourceSnapshot SourceSnapshot;
@@ -56,6 +83,17 @@ namespace ExcelScheduleLink.Revit2024.Link
         public static ExcelWidthResult Failed(string message)
         {
             return new ExcelWidthResult { Success = false, UserMessage = message };
+        }
+
+        public static ExcelWidthResult RegenerationFailed()
+        {
+            return new ExcelWidthResult
+            {
+                Success = false,
+                FatalRegenerationFailure = true,
+                UserMessage = UserMessages.RegenerationFailure,
+                Feet = null
+            };
         }
     }
 }

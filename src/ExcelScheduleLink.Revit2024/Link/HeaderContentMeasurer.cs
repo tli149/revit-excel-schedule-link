@@ -6,136 +6,185 @@ using ExcelScheduleLink.Layout;
 namespace ExcelScheduleLink.Revit2024.Link
 {
     /// <summary>
-    /// Measures the text already rendered in a linked schedule's header so
-    /// "Fit Content" can size columns without re-reading the workbook (design
-    /// v0.8.0 5.1.1): it uses what the user currently sees, works when the source
-    /// file is missing, and costs no file I/O.
-    ///
-    /// Scope: only the rows/columns of the header section are visited - with
-    /// method B the whole header section IS the table the add-in rendered
-    /// (HeaderTableRenderer clears it to 1x1 and grows it to exactly rows x
-    /// columns), so no Revit-owned title row can leak into the measurement.
-    /// Merged cells are handled once at their top-left cell; a horizontally
-    /// merged cell becomes a span requirement instead of inflating one column.
-    /// Cells with line breaks are measured by their longest line.
+    /// Reads the text already rendered in a linked schedule's header so Fit
+    /// Content can size columns and provide heading hints without re-reading
+    /// the workbook. Snapshot capture owns the Revit read and rollback; this
+    /// type only converts that one snapshot into the shared pure table.
     /// </summary>
     internal static class HeaderContentMeasurer
     {
-        internal sealed class Measurement
+        internal sealed class FitContentMeasurementOutcome
         {
-            /// <summary>Longest single-cell content per column, in half-width units.</summary>
-            public double[] MaxUnitsPerColumn;
-            /// <summary>Horizontal merges and the width their content needs (feet, scaled).</summary>
-            public List<MergeRequirement> Merges;
+            public FitContentMeasurements Measurements;
+            public string[] ColumnHeadings;
+            public string UserMessage = string.Empty;
+            public bool Success { get { return Measurements != null; } }
         }
 
-        /// <summary>
-        /// Measures the header content. <paramref name="widthScale"/> is applied to
-        /// the merge requirements so they are comparable with the scaled column
-        /// widths produced by ColumnWidthMath.
-        /// </summary>
-        public static Measurement Measure(ViewSchedule schedule, double widthScale)
+        public static FitContentMeasurementOutcome ReadMeasurements(
+            Document doc, ViewSchedule schedule, double widthScale)
         {
-            double scale = widthScale <= 0 ? 1.0 : widthScale;
-            TableSectionData tsd = schedule.GetTableData().GetSectionData(SectionType.Header);
-
-            int r0 = tsd.FirstRowNumber;
-            int c0 = tsd.FirstColumnNumber;
-            int rows = tsd.NumberOfRows;
-            int columns = tsd.NumberOfColumns;
-
-            Measurement m = new Measurement
+            SnapshotReadOutcome read =
+                ScheduleRepairService.CaptureSnapshotWithRolledBackTransaction(
+                    doc, schedule);
+            if (!read.Success)
             {
-                MaxUnitsPerColumn = new double[columns < 0 ? 0 : columns],
-                Merges = new List<MergeRequirement>()
-            };
-            if (rows <= 0 || columns <= 0)
-            {
-                return m;
+                return new FitContentMeasurementOutcome
+                {
+                    UserMessage = UserMessages.LayoutFitContentReadFailed
+                };
             }
 
-            HashSet<string> handledMerges = new HashSet<string>();
-
-            for (int r = 0; r < rows; r++)
+            try
             {
-                for (int c = 0; c < columns; c++)
+                FitContentTable table = CreateTable(read.Snapshot);
+                FitContentMeasurements measurements = PrepareTable(table, widthScale);
+                return new FitContentMeasurementOutcome
                 {
-                    int row = r0 + r;
-                    int col = c0 + c;
+                    Measurements = measurements,
+                    ColumnHeadings = FitContentText.GetColumnHeadings(table)
+                };
+            }
+            catch (ArgumentException)
+            {
+                return new FitContentMeasurementOutcome
+                {
+                    UserMessage = UserMessages.LayoutFitContentReadFailed
+                };
+            }
+        }
 
-                    TableMergedCell merged = TryGetMergedCell(tsd, row, col);
-                    bool spansColumns = merged != null && merged.Right > merged.Left;
-                    bool spansRows = merged != null && merged.Bottom > merged.Top;
+        internal static FitContentMeasurements PrepareSnapshot(
+            HeaderTableSnapshot snapshot, double widthScale)
+        {
+            return PrepareTable(CreateTable(snapshot), widthScale);
+        }
 
-                    if (spansColumns || spansRows)
-                    {
-                        // Process a merged range once, at its top-left cell.
-                        if (row != merged.Top || col != merged.Left)
-                        {
-                            continue;
-                        }
-                        string key = merged.Top + ":" + merged.Left + ":" + merged.Bottom + ":" + merged.Right;
-                        if (!handledMerges.Add(key))
-                        {
-                            continue;
-                        }
+        private static FitContentTable CreateTable(HeaderTableSnapshot snapshot)
+        {
+            if (snapshot == null)
+            {
+                throw new ArgumentNullException("snapshot");
+            }
 
-                        double mergedUnits = CharWidth.MeasureLongestLineUnits(GetText(schedule, tsd, row, col));
-                        if (spansColumns)
-                        {
-                            // Requirement over the span (design 5.1: span total >= required).
-                            m.Merges.Add(new MergeRequirement
-                            {
-                                FirstColumn = merged.Left - c0,
-                                LastColumn = merged.Right - c0,
-                                RequiredFeet = ColumnWidthMath.ContentFeetForUnits(mergedUnits) * scale
-                            });
-                        }
-                        else
-                        {
-                            // Vertical-only merge occupies a single column: normal content.
-                            Accumulate(m.MaxUnitsPerColumn, merged.Left - c0, mergedUnits);
-                        }
-                        continue;
-                    }
-
-                    double units = CharWidth.MeasureLongestLineUnits(GetText(schedule, tsd, row, col));
-                    Accumulate(m.MaxUnitsPerColumn, c, units);
+            // Snapshot structure is checked here; anchor geometry (overlaps,
+            // gaps, spans) is left to FitContentText.Prepare, its one owner.
+            if (snapshot.Rows < 0 || snapshot.Columns < 0
+                || snapshot.Cells == null || snapshot.Merges == null)
+            {
+                throw new ArgumentException(
+                    "The table snapshot is incomplete.", "snapshot");
+            }
+            long gridSize = (long)snapshot.Rows * snapshot.Columns;
+            if (gridSize > int.MaxValue)
+            {
+                throw new ArgumentException(
+                    "The table snapshot is too large.", "snapshot");
+            }
+            int expectedCellCount = (int)gridSize;
+            if (snapshot.Cells.Count != expectedCellCount)
+            {
+                throw new ArgumentException(
+                    "The table snapshot cell count does not match its shape.",
+                    "snapshot");
+            }
+            for (int index = 0; index < snapshot.Cells.Count; index++)
+            {
+                HeaderTableCellSnapshot cell = snapshot.Cells[index];
+                if (cell == null || cell.Text == null)
+                {
+                    throw new ArgumentException(
+                        "The table snapshot has an unreadable cell.",
+                        "snapshot");
                 }
             }
 
-            return m;
-        }
-
-        private static void Accumulate(double[] maxUnits, int index, double units)
-        {
-            if (index < 0 || index >= maxUnits.Length) return;
-            if (units > maxUnits[index]) maxUnits[index] = units;
-        }
-
-        /// <summary>
-        /// Cell text, preferring ViewSchedule.GetCellText (the displayed string)
-        /// and falling back to the section data when that is unavailable.
-        /// </summary>
-        private static string GetText(ViewSchedule schedule, TableSectionData tsd, int row, int column)
-        {
-            try
+            List<FitContentCell> anchors = new List<FitContentCell>();
+            bool[] covered = new bool[expectedCellCount];
+            for (int i = 0; i < snapshot.Merges.Count; i++)
             {
-                string text = schedule.GetCellText(SectionType.Header, row, column);
-                if (text != null) return text;
+                HeaderTableMergeSnapshot merge = snapshot.Merges[i];
+                if (merge == null)
+                {
+                    throw new ArgumentException(
+                        "The table snapshot has an unreadable merge.",
+                        "snapshot");
+                }
+
+                bool inBounds = merge.Top >= 0 && merge.Left >= 0
+                    && merge.Top <= merge.Bottom
+                    && merge.Left <= merge.Right
+                    && merge.Bottom < snapshot.Rows
+                    && merge.Right < snapshot.Columns;
+                if (!inBounds)
+                {
+                    // Prepare rejects the out-of-range anchor.
+                    anchors.Add(new FitContentCell(
+                        merge.Top, merge.Left,
+                        InclusiveSpanOrZero(merge.Top, merge.Bottom),
+                        InclusiveSpanOrZero(merge.Left, merge.Right),
+                        string.Empty));
+                    continue;
+                }
+
+                if (merge.Top == merge.Bottom
+                    && merge.Left == merge.Right)
+                {
+                    continue;
+                }
+
+                int rowSpan = checked(merge.Bottom - merge.Top + 1);
+                int columnSpan = checked(merge.Right - merge.Left + 1);
+                int topLeftIndex = checked(
+                    merge.Top * snapshot.Columns + merge.Left);
+                anchors.Add(new FitContentCell(
+                    merge.Top, merge.Left, rowSpan, columnSpan,
+                    snapshot.Cells[topLeftIndex].Text));
+                for (int row = merge.Top; row <= merge.Bottom; row++)
+                {
+                    for (int column = merge.Left;
+                        column <= merge.Right; column++)
+                    {
+                        covered[row * snapshot.Columns + column] = true;
+                    }
+                }
             }
-            catch (Exception)
+
+            for (int row = 0; row < snapshot.Rows; row++)
             {
-                // fall through to the section data
+                for (int column = 0; column < snapshot.Columns; column++)
+                {
+                    int index = row * snapshot.Columns + column;
+                    if (!covered[index])
+                    {
+                        anchors.Add(new FitContentCell(
+                            row, column, 1, 1,
+                            snapshot.Cells[index].Text));
+                    }
+                }
             }
-            try { return tsd.GetCellText(row, column) ?? string.Empty; }
-            catch (Exception) { return string.Empty; }
+
+            return new FitContentTable(snapshot.Rows, snapshot.Columns, anchors);
         }
 
-        private static TableMergedCell TryGetMergedCell(TableSectionData tsd, int row, int column)
+        private static FitContentMeasurements PrepareTable(
+            FitContentTable table, double widthScale)
         {
-            try { return tsd.GetMergedCell(row, column); }
-            catch (Exception) { return null; }
+            return FitContentText.Prepare(
+                table, widthScale,
+                LayoutMetrics.FitContentHeadingRowCount,
+                LayoutMetrics.MinColumnFeet, LayoutMetrics.MaxColumnFeet);
         }
+
+        private static int InclusiveSpanOrZero(int first, int last)
+        {
+            if (last < first)
+            {
+                return 0;
+            }
+            long span = (long)last - first + 1L;
+            return span > int.MaxValue ? 0 : (int)span;
+        }
+
     }
 }

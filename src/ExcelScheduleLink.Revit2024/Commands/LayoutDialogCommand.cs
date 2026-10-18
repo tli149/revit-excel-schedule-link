@@ -19,6 +19,12 @@ namespace ExcelScheduleLink.Revit2024.Commands
     {
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
+            return FatalRegenerationBoundary.RunCommand(ref message,
+                delegate { return Run(commandData); });
+        }
+
+        private static Result Run(ExternalCommandData commandData)
+        {
             UIApplication uiapp = commandData.Application;
             UIDocument uidoc = uiapp.ActiveUIDocument;
             if (uidoc == null)
@@ -37,8 +43,15 @@ namespace ExcelScheduleLink.Revit2024.Commands
 
             ViewSchedule schedule = target.Schedule;
             ElementId scheduleId = schedule.Id; // re-fetched after the dialog closes
+            string scheduleName = schedule.Name;
 
-            double[] currentFeet = LayoutService.GetCurrentWidths(schedule);
+            double[] currentFeet;
+            if (!LayoutService.TryGetCurrentWidths(schedule, out currentFeet))
+            {
+                TaskDialog.Show(
+                    UserMessages.DialogTitle, UserMessages.LayoutDimensionsReadFailed);
+                return Result.Cancelled;
+            }
             if (currentFeet.Length == 0)
             {
                 TaskDialog.Show(UserMessages.DialogTitle, UserMessages.LayoutNoColumns);
@@ -46,9 +59,11 @@ namespace ExcelScheduleLink.Revit2024.Commands
             }
 
             ColumnWidthMode currentMode = LayoutService.GetColumnWidthMode(schedule);
-            double widthScale = LayoutService.GetWidthScale(schedule);
-            LengthUnitChoice unit = LengthUnitHelper.Resolve(doc);
+            RowHeightMode currentRowMode = LayoutService.GetRowHeightMode(schedule);
+            LengthUnitChoice unit = LayoutService.ResolveLengthUnit(doc);
             int columnCount = currentFeet.Length;
+            string[] columnHeadings = LayoutService.ReadColumnHeadings(
+                doc, schedule, columnCount);
 
             // "Apply" inside the dialog: same re-verification and all-or-nothing
             // transaction as the closing path, just without closing. The dialog runs
@@ -58,25 +73,33 @@ namespace ExcelScheduleLink.Revit2024.Commands
             // the command must therefore end with Succeeded whatever the user
             // does afterwards; Cancel and Discard only ever drop unapplied edits.
             bool appliedInDialog = false;
-            Func<double[], ColumnWidthMode, LayoutSourceSnapshot, LayoutApplyResult> applyNow =
-                delegate (double[] feet, ColumnWidthMode policy, LayoutSourceSnapshot sourceSnapshot)
+            Func<double[], ColumnWidthMode, RowHeightMode, LayoutSourceSnapshot, LayoutApplyResult> applyNow =
+                delegate (double[] feet, ColumnWidthMode policy, RowHeightMode rowPolicy,
+                    LayoutSourceSnapshot sourceSnapshot)
                 {
-                    ViewSchedule live = doc.GetElement(scheduleId) as ViewSchedule;
-                    string issue = ReVerify(doc, live, feet);
-                    if (issue != null)
-                    {
-                        return LayoutApplyResult.Failed(issue, null);
-                    }
-                    if (!LayoutMutationAuthorization.Authorize(doc, live, sourceSnapshot))
-                    {
-                        return LayoutApplyResult.Failed(UserMessages.ReloadCancelled, null);
-                    }
-                    LayoutApplyResult inDialog = LayoutService.Apply(doc, live, feet, policy, null, true);
-                    if (inDialog != null && inDialog.Success)
-                    {
-                        appliedInDialog = true;
-                    }
-                    return inDialog;
+                    return FatalRegenerationBoundary.Guard<LayoutApplyResult>(
+                        delegate
+                        {
+                            ViewSchedule live = doc.GetElement(scheduleId) as ViewSchedule;
+                            string issue = ReVerify(doc, live, feet);
+                            if (issue != null)
+                            {
+                                return LayoutApplyResult.Failed(issue, null);
+                            }
+                            if (!LayoutMutationAuthorization.Authorize(doc, live, sourceSnapshot))
+                            {
+                                return LayoutApplyResult.Failed(UserMessages.ReloadCancelled, null);
+                            }
+                            LayoutApplyResult inDialog = LayoutService.Apply(
+                                doc, live, feet, policy, rowPolicy, null, true,
+                                columnHeadings: columnHeadings);
+                            if (inDialog != null && inDialog.Success)
+                            {
+                                appliedInDialog = true;
+                            }
+                            return inDialog;
+                        },
+                        LayoutApplyResult.RegenerationFailed);
                 };
 
             // ShowDialog() without an explicit Revit owner, and no thread DPI
@@ -86,12 +109,28 @@ namespace ExcelScheduleLink.Revit2024.Commands
             // (blurry) dialog instead.
             LayoutDialogOutcome outcome;
             using (LayoutDialog dialog = new LayoutDialog(
-                schedule.Name,
+                scheduleName,
                 currentFeet,
                 currentMode,
+                currentRowMode,
                 unit,
-                delegate { return LayoutService.ComputeFitContent(schedule, widthScale); },
-                delegate { return ExcelWidthReader.ReadColumnWidths(doc, schedule, columnCount); },
+                columnHeadings,
+                delegate (double[] feet)
+                {
+                    return FatalRegenerationBoundary.Guard<FitContentResult>(
+                        delegate
+                        {
+                            return LayoutService.ComputeFitContent(doc,
+                                doc.GetElement(scheduleId) as ViewSchedule, feet);
+                        },
+                        FitContentResult.RegenerationFailed);
+                },
+                delegate
+                {
+                    return FatalRegenerationBoundary.Guard<ExcelWidthResult>(
+                        delegate { return ExcelWidthReader.ReadColumnWidths(doc, schedule, columnCount); },
+                        ExcelWidthResult.RegenerationFailed);
+                },
                 applyNow))
             {
                 dialog.ShowDialog();
@@ -126,11 +165,22 @@ namespace ExcelScheduleLink.Revit2024.Commands
                 }
 
                 LayoutApplyResult applied = LayoutService.Apply(
-                    doc, fresh, outcome.CandidateFeet, outcome.ReloadPolicy, null, true);
-                TaskDialog.Show(UserMessages.DialogTitle, applied.UserMessage);
+                    doc, fresh, outcome.CandidateFeet, outcome.ReloadPolicy,
+                    outcome.RowReloadPolicy, null, true,
+                    columnHeadings: columnHeadings);
+                string appliedMessage = applied.UserMessage;
+                if (applied.Success)
+                {
+                    string notes = LengthUnitHelper.FitContentNotes(
+                        outcome.FitContentDiagnostics, unit, columnHeadings);
+                    if (!string.IsNullOrEmpty(notes))
+                    {
+                        appliedMessage += "\n\n" + notes;
+                    }
+                }
+                TaskDialog.Show(UserMessages.DialogTitle, appliedMessage);
                 if (!applied.Success)
                 {
-                    message = applied.UserMessage;
                     // Never switch views after a failed apply. Failed would also undo
                     // an earlier in-dialog Apply, so only use it when nothing was committed.
                     return appliedInDialog ? Result.Succeeded : Result.Failed;
@@ -142,7 +192,7 @@ namespace ExcelScheduleLink.Revit2024.Commands
                 if (ScheduleActivationGuard.CheckAndOfferRepair(uidoc, fresh))
                 {
                     try { uidoc.ActiveView = fresh; }
-                    catch (Exception) { /* best effort */ }
+                    catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex)) { /* best effort */ }
                 }
             }
             return Result.Succeeded;
@@ -166,7 +216,7 @@ namespace ExcelScheduleLink.Revit2024.Commands
                     return UserMessages.LayoutInvalidTarget;
                 }
             }
-            catch (Exception)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 return UserMessages.LayoutInvalidTarget;
             }
@@ -185,7 +235,7 @@ namespace ExcelScheduleLink.Revit2024.Commands
             {
                 headerColumns = schedule.GetTableData().GetSectionData(SectionType.Header).NumberOfColumns;
             }
-            catch (Exception)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 return UserMessages.LayoutInvalidTarget;
             }

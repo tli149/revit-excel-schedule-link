@@ -51,14 +51,20 @@ For each workbook (copy this block if you tried more than one):
 | Reload with the workbook open in Excel | ☐ yes ☐ no ☐ didn't try | |
 | Use the Link Manager | ☐ yes ☐ no ☐ didn't try | |
 | Approve a network server when asked | ☐ yes ☐ no ☐ didn't try | |
-| Change width scale / modes and reload | ☐ yes ☐ no ☐ didn't try | |
+| Drag column widths, then reload | ☐ yes ☐ no ☐ didn't try | Did the widths survive? |
+| Use Column Widths and Table width / Fit to Total | ☐ yes ☐ no ☐ didn't try | |
+| Choose column and row reload policies | ☐ yes ☐ no ☐ didn't try | |
 
 ## 4. Readability of the result
 
 - Were the values displayed the way Excel shows them? If not, paste examples
   (Excel shows ___ / Revit shows ___):
-- Were the column widths usable at the default scale (1.5)? What scale did you
-  end up using?
+- Were the initial column widths usable? If you dragged or changed them, did they
+  remain usable after reload?
+- Did **Fit Content** produce readable results on the sheet? Did you need to use
+  **Table width** and **Fit to Total**?
+- When you chose **Fit rows to text on reload** or **Keep current row heights**, did
+  the row behavior match what you expected?
 - Anything about the table on the sheet (size, alignment, printing) that
   bothered you?
 

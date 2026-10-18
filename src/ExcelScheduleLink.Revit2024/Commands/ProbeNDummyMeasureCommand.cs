@@ -16,7 +16,7 @@ namespace ExcelScheduleLink.Revit2024.Commands
     {
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
-            return NDummyBodyProbe.RunMeasure(commandData, ref message);
+            return NDummyBodyProbe.RunMeasure(commandData);
         }
     }
 }

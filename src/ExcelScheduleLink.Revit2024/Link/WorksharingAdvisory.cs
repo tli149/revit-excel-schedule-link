@@ -30,7 +30,7 @@ namespace ExcelScheduleLink.Revit2024.Link
             {
                 return a.IsValidObject && b.IsValidObject && a.Equals(b);
             }
-            catch (Exception)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 return false;
             }
@@ -42,7 +42,7 @@ namespace ExcelScheduleLink.Revit2024.Link
             {
                 return doc != null && doc.IsWorkshared;
             }
-            catch (Exception)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 return false;
             }
@@ -55,7 +55,7 @@ namespace ExcelScheduleLink.Revit2024.Link
             {
                 isDetached = doc != null && doc.IsDetached;
             }
-            catch (Exception)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 return false;
             }
@@ -70,7 +70,7 @@ namespace ExcelScheduleLink.Revit2024.Link
             {
                 isDetached = doc != null && doc.IsDetached;
             }
-            catch (Exception)
+            catch (Exception ex) when (!ModelMutation.IsFatalRegeneration(ex))
             {
                 return;
             }

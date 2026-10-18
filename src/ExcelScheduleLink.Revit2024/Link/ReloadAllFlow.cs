@@ -59,7 +59,7 @@ namespace ExcelScheduleLink.Revit2024.Link
                 }
 
                 ReloadOutcome outcome = ReloadService.Reload(
-                    doc, schedule, ReloadScope.AllLinks, null,
+                    doc, schedule, ReloadScope.AllLinks,
                     row.IntegrityResult);
                 ReloadAllRowResult rowResult = new ReloadAllRowResult
                 {
@@ -95,6 +95,15 @@ namespace ExcelScheduleLink.Revit2024.Link
                                 UserMessages.ManagerReloadAllPostRepairNotHealthy(
                                     row.ScheduleName));
                             break;
+                        }
+                        string details = UserMessages.AppendRenderNotes(
+                            UserMessages.ReloadColumnCountNote(outcome),
+                            0, 0, false, false, 0,
+                            outcome.RowHeightsRejected, outcome.ScheduleName,
+                            rowsMayHideText: outcome.RowsMayHideText);
+                        if (!string.IsNullOrEmpty(details))
+                        {
+                            result.Details.Add(details);
                         }
                         result.Success++;
                         if (outcome.Identity

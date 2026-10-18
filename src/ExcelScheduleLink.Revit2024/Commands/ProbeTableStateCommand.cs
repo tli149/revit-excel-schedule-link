@@ -32,7 +32,6 @@ namespace ExcelScheduleLink.Revit2024.Commands
             catch (Exception ex)
             {
                 TaskDialog.Show(Title, "The active document could not be read.\n\n" + ex);
-                message = ex.Message;
                 return Result.Failed;
             }
             if (uidoc == null)
@@ -56,7 +55,6 @@ namespace ExcelScheduleLink.Revit2024.Commands
                     + "Record this failure with the diagnostic run; a missing or partial\n"
                     + "file must not be interpreted as a clean table state.\n\n"
                     + ex);
-                message = ex.Message;
                 return Result.Failed;
             }
 

@@ -1,7 +1,7 @@
 <Project>
   <PropertyGroup>
     <Product>ExcelScheduleLink</Product>
-    <Version>0.9.4</Version>
+    <Version>0.10.0</Version>
     <Authors>tli149</Authors>
     <Nullable>disable</Nullable>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>

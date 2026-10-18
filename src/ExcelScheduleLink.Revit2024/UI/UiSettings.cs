@@ -88,28 +88,6 @@ namespace ExcelScheduleLink.Revit2024.UI
             _values[key] = value.ToString(CultureInfo.InvariantCulture);
         }
 
-        public double GetDouble(string key, double fallback)
-        {
-            string text;
-            double value;
-            if (_values.TryGetValue(key, out text)
-                && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value)
-                && !double.IsNaN(value)
-                && !double.IsInfinity(value))
-            {
-                return value;
-            }
-            return fallback;
-        }
-
-        public void SetDouble(string key, double value)
-        {
-            if (!double.IsNaN(value) && !double.IsInfinity(value))
-            {
-                _values[key] = value.ToString("R", CultureInfo.InvariantCulture);
-            }
-        }
-
         public string GetString(string key, string fallback)
         {
             string value;

@@ -1,6 +1,6 @@
 # Excel Schedule Link — User Guide
 
-> **Pilot release (0.9.4), Revit 2024 only.** Try it on a copy of a project
+> **Pilot release (0.10.0), Revit 2024 only.** Try it on a copy of a project
 > first, keep backups, and check the result before you save or sync. See
 > [Before you start](#before-you-start).
 
@@ -12,9 +12,14 @@
   that show the schedule keep their layout.
 - The add-in only **reads** Excel. It never writes to your workbook. It reads a
   temporary copy, so the file can stay open in Excel.
-- Every command reads the whole workbook first, then changes the model in a
-  single Revit transaction. If something fails, the add-in rolls that
-  transaction back and tells you whether Revit confirmed the rollback. See
+- **Workbook-based actions** read the needed workbook data before changing the
+  model in a single Revit transaction. Fit Content measures the table already
+  rendered in Revit, Distribute Evenly uses the current widths (the dialog's
+  candidates, or the live table from Quick Layout), and Restore Excel Widths
+  reads the linked worksheet. A failure inside an open mutation
+  transaction attempts a rollback and reports whether Revit confirmed it; a
+  later check after commit can still report a failure without undoing the
+  committed change. See
   [When something fails](#when-something-fails).
 
 ## Before you start
@@ -40,15 +45,20 @@ On the **Excel Schedule Link** ribbon tab, click **Link Excel**, then choose an
 |---|---|
 | **Worksheet** | Choose which sheet of the workbook to show. |
 | **Cell range** (optional) | For example `A1:F30` to show only that block. Leave it empty to use the whole used range. |
-| **Column width scale** | Multiplies all column widths. **1.5–2.0 is recommended.** Higher values (for example 3.0) read well but make the table very wide. |
+
+The add-in calculates the initial widths from Excel and the displayed text with
+a fixed 1.5 factor. The Link dialog has no scale field. New links keep their
+current column widths on later reloads. Existing links retain their saved width
+policies and conversion factors, including older factors; factor editing is no
+longer offered.
 
 Click **Link Worksheet**. A new schedule view named `<workbook> - <worksheet>`
 opens. You can rename it in the Project Browser like any other view. The link
 stays with the schedule, not with its name.
 
-The next time you use Link Excel, the folder, worksheet, range and width scale
-from your last successful link are offered again. If the new workbook does not
-have that worksheet, its first worksheet is selected instead.
+The next time you use Link Excel, the folder, worksheet and range from your last
+successful link are offered again. If the new workbook does not have that
+worksheet, its first worksheet is selected instead.
 
 **Already linked?** If the same workbook, worksheet **and** range are already
 linked in this model, the add-in tells you and offers to open the existing
@@ -65,9 +75,14 @@ schedules.
 | Units inside custom formats (`12.3 A`, `12.35 kVA`, `1234 CFM`) and `$` prefixes | Yes |
 | Fractions (`1 1/2`, `2 7/10`) | Yes, up to three-digit denominators |
 | Merged cells | Yes |
-| Column widths | Approximately (adjust with the width scale) |
+| Column widths | Calculated from Excel and displayed text for a new link; adjust them in Column Widths or Revit |
 | Scientific notation, elapsed time like `[h]:mm`, dates mixed with quoted text | Shown as plain values for now |
-| Fonts, colors, borders, row heights, images, charts | No — see [Styling the table](#styling-the-table) |
+| Fonts, colors, borders, Excel row heights, images, charts | No — see [Styling the table](#styling-the-table) |
+
+Excel row heights are not copied. When **Fit rows to text on reload** is selected,
+the add-in estimates and sets each Revit header-row height on Link, on Reload,
+and on every Column Widths Apply. It can make rows taller or shorter. If a row
+cannot be fitted, the action still succeeds and reports that text may be hidden.
 
 **Size limits.**
 
@@ -131,15 +146,19 @@ including a schedule placed on a sheet.
 
 This opens a dialog that lists every column:
 
+![Column Widths dialog](images/column-widths.png)
+
 | Part | What it does |
 |---|---|
-| **Width** | Type an exact width in mm (or inches in an imperial project). |
-| **Fit Content** | Sizes each column to the text it shows. CJK (Chinese, Japanese, Korean) characters count as full width, and merged cells widen their columns together so the text fits. |
-| **Distribute Evenly** | Gives every column the same width, keeping the total. |
-| **Restore Excel Widths** | Reads the worksheet again and applies the widths it has **now**. |
-| **Fit to Total** | Scales all columns to the total width you type, keeping their proportions. |
-| **Reload policy** | *Keep these widths on reload* or *Recalculate from Excel on reload* — see below. |
+| **Column** | Shows the spreadsheet letter and a short heading, such as `B  Description`. The first eligible single-column non-blank cell supplies the heading; a title merged across columns is skipped. |
+| **Width** | Type an exact width in the project units. Changed values must be from **30.5 to 609.6 mm** or **1.20 to 24.00 in**. A narrower width made by dragging in Revit is kept if you do not change it in this dialog. |
+| **Fit Content** | Redistributes the current candidate total using the displayed text when that total is within the supported total-width range. Outside that range, it uses all-minimum or all-maximum column widths and warns that the total cannot be kept. Numbers and reference-like values are protected when possible; other text may wrap. Short merged cells and protected values that cannot stay on one line are reported. |
+| **Distribute Evenly** | Gives every column the same width from the current candidate total. The total is kept when each equal share is within 30.5 to 609.6 mm (1.20 to 24.00 in); otherwise every column is set to that limit and the total changes. |
+| **Restore Excel Widths** | Reads the current worksheet and applies the widths it has **now**. |
+| **Table width / Fit to Total** | Shows the total in mm or inches. Fit Content preserves the current candidate total within the supported total-width range; outside that range it falls back to all-minimum or all-maximum widths and warns that the total cannot be kept. Fit to Total is the explicit way to widen or otherwise choose a new total. |
+| **Reload policies** | Choose separately whether column widths are kept or recalculated from Excel, and whether row heights are fitted to text or kept. |
 
+Fit Content, Distribute Evenly and Restore Excel Widths change candidates only.
 Nothing changes in the model until you press one of these buttons:
 
 - **Apply** — applies the widths and keeps the dialog open, so you can try
@@ -152,21 +171,76 @@ Nothing changes in the model until you press one of these buttons:
 Widths are applied all together or not at all. If one column cannot be set,
 nothing changes and the column is named in the message.
 
+If a typed value is not a number, the cell is marked and the status line at the
+bottom explains the problem and the allowed range. Apply waits until the marked
+value is corrected. A changed width outside the allowed range is refused with
+the range and the column's letter plus heading. A preserved native width that is
+already narrower than the displayed range can remain unchanged.
+
+### Row heights
+
+With **Fit rows to text on reload**, the add-in sets every header-row height to
+fit the displayed text on the initial Link, every Reload, and every Column Widths
+Apply, including the ribbon Quick Layout tools. Fitting can shorten a previously
+tall row as well as enlarge a short one. If a fitted row cannot be retained, the
+action still succeeds and says **Text may be hidden in N row(s): the rows could
+not be fitted to their text.** If fitting measurements are unavailable, it says
+that rows could not be fitted because measurements were unavailable and asks you
+to check for hidden text.
+
+With **Keep current row heights**, text fitting is disabled. Apply leaves the
+current row heights alone. During Reload, the add-in restores the captured row
+heights where Revit allows; if it cannot keep a saved height, the reload reports
+**Revit did not keep the saved height for N row(s).** Wrapped text may still be
+hidden; choose Fit rows to text and apply, or adjust the row heights yourself.
+Revit's own drag operation does not trigger fitting until the next add-in Apply
+or Reload.
+
+Fit Content is a width preview, so it does not set row heights until Apply. It
+preserves the current candidate total only within the supported total-width
+range. If the total is below or above that range, all columns use the minimum or
+maximum supported width, and the status warns that keeping the total is not
+possible; the resulting total is shown. Its comfortable-width figure is an
+estimate and may be marked **(limited estimate)** when long text or maximum
+column widths cap the calculation. It never shrinks, truncates or splits the
+text. Inspect the result on the sheet, especially for merged cells and long
+text.
+
+Row fitting is an estimate calibrated on screen at **150% display scaling with
+Arial**. Very long Latin prose can wrap one line more than estimated. Sheet and
+PDF output has been checked for the tested tables, not for every font or table
+size, and performance for a 500-row table has not yet been measured.
+
 ### Quick Layout
 
 The **Quick Layout** dropdown applies *Fit Content*, *Distribute Evenly* or
-*Restore Excel Widths* in one click, without opening the dialog.
+*Restore Excel Widths* in one click, without opening the dialog. Fit Content
+measures the displayed table and uses the live table total when it is supported;
+Distribute Evenly uses the live current widths and total. Restore Excel Widths
+reads the linked worksheet and uses its workbook-derived widths, so its total
+can change. When Fit rows to text is selected, fitting happens in the same Apply
+action.
 
 ### How layout and reload work together
 
-- *Fit Content*, *Distribute Evenly* and typing your own widths count as a
-  deliberate layout, so the link switches to **Keep manual widths on reload**.
-- *Restore Excel Widths* changes only the current widths. It never changes the
-  reload policy.
-- You can set the policy yourself in the dialog or in the Link Manager.
+- Column and row reload policies are stored by **Column Widths** and applied
+  together with the current width change.
+- Typing a width, using Fit Content, using Distribute Evenly, or using Fit to
+  Total selects **Keep these widths on reload**. Quick Layout Fit Content and
+  Distribute save that column policy immediately. The row-height policy remains
+  separate and is not changed by this switch.
+- *Restore Excel Widths* changes only the current widths. It leaves both reload
+  policies unchanged.
+- Fit Content preserves the current total within the supported total-width
+  range. If the total is outside that range, it uses all-minimum or all-maximum
+  widths and warns that the total cannot be kept. If the estimate says more
+  width is comfortable, enter the displayed value under **Table width** and
+  press **Fit to Total** to choose a wider supported total explicitly.
 
-Revit only allows roughly 1.2–24 inches per column, so a very long text may
-still wrap.
+Changed widths are limited to roughly 1.2–24 inches per column, so very long
+text may still wrap. A long title across the whole table can show **(limited
+estimate)** rather than a merged-cell shortage because the estimate caps very
+long text.
 
 ## Reloading after Excel changes
 
@@ -176,7 +250,10 @@ still wrap.
 
 The result message tells you what happened: the workbook had not changed, or
 the changed workbook was reloaded after you confirmed it. Sheet placements are
-kept, and nothing is duplicated.
+kept, and nothing is duplicated. If the rendered column count changed, the
+message gives a limited hint to inspect the widths and try Fit Content or Restore
+Excel Widths. A fixed range, a same-count substitution, or a capped 50-column
+render can change the content without producing that hint.
 
 If the workbook cannot be found at its saved path or next to the model where it
 was found before, the reload says so and changes nothing. Put the file back, or
@@ -186,7 +263,10 @@ link the new location.
 
 Each link remembers a fingerprint (SHA-256) of the workbook it last read.
 
-- **Same fingerprint:** the reload goes ahead without asking you.
+- **Same fingerprint:** the reload normally goes ahead without asking you. If
+  another user created the link (or Revit cannot tell who did) and its saved
+  column policy recalculates widths from Excel, the independent width-risk check
+  still asks for confirmation. Reload all skips that link instead of asking.
 - **Different, and you created the link:** you get a normal "the workbook has
   changed — reload?" question.
 - **Different, and someone else created the link (or Revit cannot tell who):**
@@ -199,14 +279,21 @@ Each link remembers a fingerprint (SHA-256) of the workbook it last read.
 decision are skipped and listed as **Confirmation required**, separately from
 missing or failed links.
 
+When the workbook bytes match, Reload all may process a link created by another
+user if its saved column policy is Keep. For a link created by another user, or
+whose creator is unknown, a saved policy that recalculates widths from Excel still
+needs the independent width-risk confirmation, so Reload all skips that link.
+Changed or unknown source identity still needs confirmation, so
+Reload all skips that link.
+
 In a workshared model, the first command that changes an Excel-linked schedule
 shows a short reminder once per Revit session. It does not block anything.
 
 ### Links made with older versions
 
 Links made with Excel Schedule Link versions before 0.9.1 appear in Link
-Manager as **Legacy / identity unknown**. The first time you reload, save
-settings, or apply a layout to such a link, the add-in asks before upgrading it.
+Manager as **Legacy / identity unknown**. The first time you reload or apply a
+layout to such a link, the add-in asks before upgrading it.
 After the upgrade, older versions of the add-in can no longer reload or manage
 that link (the table itself stays visible). Cancel leaves everything as it was.
 
@@ -270,11 +357,20 @@ in Link Manager.
 ## When something fails
 
 - If the workbook cannot be read, nothing in the model is touched.
-- If a later step fails, the add-in rolls back its transaction. It says the
-  change was rolled back **only when Revit confirms it**. Otherwise it says
-  **Rollback completion could not be verified.** In that case, or if Revit
-  reports a regeneration failure, **close the model without saving** and open
-  it again before you continue.
+- If a failure occurs while a model-mutation transaction is open, the add-in
+  attempts to roll it back. It says the change was rolled back **only when
+  Revit confirms it**. Otherwise it says **Rollback completion could not be
+  verified.** A reload or repair can also fail a final integrity check after its
+  mutation has committed; that check can leave the committed change in the
+  model and is not a transaction rollback. If rollback cannot be verified, or
+  if Revit reports a regeneration failure, **close the model without saving**
+  and open it again before you continue.
+- If Revit reports a regeneration failure, the add-in stops work for that
+  document session. It does not keep checking, reloading, repairing, or reading
+  the document automatically after the failure. A change that had already
+  completed before the failure remains; the failed action is not reported as
+  successful. You see one add-in message, not a second Revit error box. Close
+  the model without saving and reopen it before continuing.
 
 ## The Link Manager
 
@@ -297,26 +393,15 @@ your links.
   `Not checked - do not open`. **Check and repair...** checks up to 256
   schedules and lets you approve each repair. See
   [Unsafe schedule styles](#unsafe-schedule-styles).
-- **Reload selected** reloads the selected link with the settings shown in the
-  editor. **Reload all** reloads every link that does not need a decision. One
-  failing link never affects the others.
-- **Settings** for the selected link apply on its next reload:
-
-| Setting | Meaning |
-|---|---|
-| **Column width scale** | Same as in the Link dialog. 1.5–2.0 is recommended. |
-| **Column width mode** | *Apply Excel widths*: every reload re-applies the widths from Excel. *Keep manual widths*: widths you set by hand survive reloads. |
-| **Row height mode** | The same idea for row heights. |
-
-These modes only control what happens **during a reload**. They do not change
-how dragging works in Revit, and they do not lift Revit's own column-width
-limit.
-
-When you change a setting, the heading says **unsaved changes** and
-**Apply settings** becomes available. If you select another link, close the
-window, or click Reload all with unsaved edits, you are asked to
-**Save / Discard / Cancel**. Reload selected uses the visible settings
-automatically.
+- **Reload selected** reloads the selected link using its saved policies.
+  **Reload all** reloads every link that does not need a decision. Ordinary
+  per-link failures are isolated, so they do not stop other links. A fatal Revit
+  regeneration failure stops the batch, so later links are not processed.
+  Manager has no settings editor or settings-save prompt.
+- Use **Column Widths** to store the separate column-width and row-height reload
+  policies. Those policies are applied atomically with a successful layout
+  change. They do not change how direct dragging works in Revit or lift the
+  changed-width range.
 
 The window size and column layout are remembered between sessions.
 

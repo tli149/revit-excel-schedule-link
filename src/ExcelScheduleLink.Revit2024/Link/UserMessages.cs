@@ -1,4 +1,9 @@
-﻿namespace ExcelScheduleLink.Revit2024.Link
+﻿using System;
+using System.Collections.Generic;
+using System.Globalization;
+using ExcelScheduleLink.Layout;
+
+namespace ExcelScheduleLink.Revit2024.Link
 {
     /// <summary>
     /// Centralized user-facing strings for the production add-in UI
@@ -83,9 +88,6 @@
         public const string LinkDialogRangeLabel = "Cell range (optional):";
         public const string LinkDialogRangeHint =
             "Example: A1:F30. Leave empty to read the whole used range.";
-        public const string LinkDialogWidthScaleLabel = "Column width scale:";
-        public const string LinkDialogWidthScaleHint =
-            "Multiplier applied to all column widths. Recommended: 1.5 - 2.0.";
         public const string LinkDialogOk = "Link Worksheet";
         public const string LinkDialogCancel = "Cancel";
 
@@ -138,7 +140,10 @@
             int totalColumns,
             bool truncated,
             bool viewWidthProblem,
-            int rejectedColumns)
+            int rejectedColumns,
+            int rejectedRows = 0,
+            string scheduleName = null,
+            int? rowsMayHideText = 0)
         {
             string result = summary ?? string.Empty;
             if (truncated)
@@ -149,7 +154,43 @@
             {
                 result += "\n\n" + ViewWidthNote(rejectedColumns);
             }
+            string rowNote = RowHeightsNotKept(rejectedRows, scheduleName);
+            if (!string.IsNullOrEmpty(rowNote))
+            {
+                result += string.IsNullOrEmpty(result) ? rowNote : "\n\n" + rowNote;
+            }
+            string fitNote = RowsMayHideTextNote(rowsMayHideText, scheduleName);
+            if (!string.IsNullOrEmpty(fitNote))
+            {
+                result += string.IsNullOrEmpty(result) ? fitNote : "\n\n" + fitNote;
+            }
             return result;
+        }
+
+        public const string LayoutDimensionsReadFailed =
+            "The table's current column widths could not be read. No layout transaction was started.";
+
+        public static string RowHeightsNotKept(int rejectedRows, string scheduleName = null)
+        {
+            if (rejectedRows <= 0) return string.Empty;
+            string prefix = string.IsNullOrEmpty(scheduleName)
+                ? string.Empty : "\"" + scheduleName + "\": ";
+            return prefix + "Revit did not keep the saved height for "
+                + rejectedRows + " row(s).";
+        }
+
+        public static string RowsMayHideTextNote(int? rowsMayHideText,
+            string scheduleName = null)
+        {
+            if (rowsMayHideText.HasValue && rowsMayHideText.Value <= 0)
+                return string.Empty;
+            string prefix = string.IsNullOrEmpty(scheduleName)
+                ? string.Empty : "\"" + scheduleName + "\": ";
+            return prefix + (rowsMayHideText.HasValue
+                ? "Text may be hidden in " + rowsMayHideText.Value
+                    + " row(s): the rows could not be fitted to their text."
+                : "Rows could not be fitted to their text because measurements were unavailable. "
+                    + "Check for hidden text.");
         }
 
         public static string TruncationNote(int totalRows, int totalColumns)
@@ -174,7 +215,7 @@
             if (rejectedColumns > 0)
             {
                 note += "\n\nRevit also refused the requested width for " + rejectedColumns
-                    + " column(s). Lower the column width scale in Link Manager and reload.";
+                    + " column(s). Set narrower widths for those columns in Column Widths.";
             }
             return note;
         }
@@ -290,7 +331,8 @@
         {
             return "This link was created by \"" + DisplayCreator(creator) + "\" and is set to Apply Excel "
                 + "widths. Reloading reapplies workbook widths to the shared schedule. Continue only if "
-                + "that is intended, or cancel and choose Keep manual widths.";
+                + "that is intended, or cancel and choose \"" + LayoutPolicyKeep
+                + "\" in Column Widths.";
         }
         public const string ReloadWidthWarningContinue = "Reload and apply this width policy";
         public const string ReloadWidthWarningContinueHint =
@@ -319,7 +361,20 @@
             {
                 text += "\n" + UnsafeCellStylesRepaired;
             }
+            string columnCountNote = ReloadColumnCountNote(outcome);
+            if (!string.IsNullOrEmpty(columnCountNote))
+            {
+                text += "\n" + columnCountNote;
+            }
             return text;
+        }
+
+        public static string ReloadColumnCountNote(ReloadOutcome outcome)
+        {
+            if (outcome == null || !outcome.ColumnCountChanged) return string.Empty;
+            return "\"" + outcome.ScheduleName + "\": column count changed from "
+                + outcome.PreviousColumns.Value + " to " + outcome.Columns
+                + ". Check the column widths. Use Fit Content or Restore Excel Widths if needed.";
         }
 
         public static string ReloadOutcomeMessage(ReloadOutcome outcome)
@@ -334,7 +389,9 @@
                     ReloadSucceeded(outcome),
                     outcome.SourceRows, outcome.SourceColumns,
                     outcome.Truncated, outcome.ViewWidthProblem,
-                    outcome.ColumnWidthsRejected);
+                    outcome.ColumnWidthsRejected,
+                    outcome.RowHeightsRejected, outcome.ScheduleName,
+                    rowsMayHideText: outcome.RowsMayHideText);
             }
             return outcome.Detail ?? string.Empty;
         }
@@ -580,12 +637,6 @@
             "The link storage was unavailable.";
         public const string LinkTransactionDidNotCommit =
             "The link transaction did not commit.";
-        public const string SettingsTransactionNotStarted =
-            "The settings transaction did not start.";
-        public static string SettingsTransactionReturnedStatus(string status)
-        {
-            return "The settings transaction returned status " + status + ".";
-        }
         public const string RepairTransactionNotStarted =
             "Revit did not allow starting the repair transaction.";
         public const string RepairDocumentNotModifiableAfterStart =
@@ -686,9 +737,6 @@
         public const string ManagerColRange = "Range";
         public const string ManagerColSource = "Source";
         public const string ManagerColStatus = "Status";
-        public const string ManagerColScale = "Scale";
-        public const string ManagerColColMode = "Col width";
-        public const string ManagerColRowMode = "Row height";
         public const string ManagerStatusMissing = "Missing";
         public const string ManagerStatusNetworkNotApproved = "Network - not approved";
         public const string ManagerStatusInvalidPath = "Invalid workbook path";
@@ -696,61 +744,16 @@
         public const string ManagerStatusProtected = "Protected";
         public const string ManagerStatusProtectedBaselineUnknown =
             "Protected / identity unknown";
-        public const string ManagerSettingsGroup = "Settings for the selected link (applied on next reload)";
-        public const string ManagerWidthScaleLabel = "Column width scale:";
-        public const string ManagerWidthScaleHint = "Recommended: 1.5 - 2.0";
-        public const string ManagerColModeLabel = "Column width mode:";
-        public const string ManagerRowModeLabel = "Row height mode:";
-        public const string ManagerApply = "Apply settings";
         public const string ManagerReloadSelected = "Reload selected";
         public const string ManagerReloadAll = "Reload all";
         public const string ManagerClose = "Close";
         public const string ManagerSelectFirst = "Select a link in the list first.";
-        public const string ManagerSettingsSaved =
-            "Settings saved. They will take effect the next time this link is reloaded.";
-        public static string ManagerSettingsSaveFailed(
-            bool rollbackVerified, bool transactionStarted)
-        {
-            return "The settings could not be saved. "
-                + (!transactionStarted
-                    ? "No settings transaction was started."
-                    : rollbackVerified
-                    ? "The settings transaction was rolled back; no settings change was saved."
-                    : RollbackCompletionNotVerified);
-        }
-        public static string ManagerReloadAllSettingsSaveFailed(
-            bool rollbackVerified, bool transactionStarted)
-        {
-            string transactionResult = !transactionStarted
-                ? "No settings transaction was started."
-                : rollbackVerified
-                    ? "The settings transaction was rolled back; no settings change was saved."
-                    : RollbackCompletionNotVerified;
-            return "Reload all was canceled because the selected link's settings could not be saved.\n\n"
-                + transactionResult + "\n"
-                + "Zero links were reloaded. Your unsaved settings remain in the editor. To continue without them, "
-                + "run Reload all again and choose Discard.";
-        }
         public const string ManagerLinkNoLongerAvailable =
             "The selected linked schedule is no longer available. Refresh the manager and try again.";
-        public const string ManagerSettingsChangedGroup =
-            "Settings for the selected link (unsaved changes)";
-        public const string ManagerSaveBeforeSelection =
-            "Save changes to the selected link before selecting another link?\n\n"
-            + "Yes = Save   No = Discard   Cancel = Keep editing";
-        public const string ManagerSaveBeforeClose =
-            "Save changes to the selected link before closing Link Manager?\n\n"
-            + "Yes = Save   No = Discard   Cancel = Keep editing";
-        public const string ManagerSaveBeforeReloadAll =
-            "Save changes to the selected link before reloading all links?\n\n"
-            + "Yes = Save   No = Discard   Cancel = Keep editing";
-        public const string ManagerReloadSavesPending =
-            "Unsaved settings are saved automatically before Reload selected.";
-
-        public const string ColModeApplyExcel = "Apply Excel widths";
-        public const string ColModeKeepManual = "Keep manual widths";
-        public const string RowModeApplyExcel = "Apply Excel / auto heights";
-        public const string RowModeKeepManual = "Keep manual heights";
+        public const string ManagerReloadSelectedTooltip =
+            "Reload the selected link using its saved reload policies.";
+        public const string RowModeFitToText = "Fit rows to text on reload";
+        public const string RowModeKeepManual = "Keep current row heights on reload";
 
         public static string ManagerReloadSummary(
             int success, int unchanged, int missing, int failed, int repaired,
@@ -815,22 +818,21 @@
         public const string RibbonLinkText = "Link\nExcel";
         public const string RibbonLinkTooltip = "Link an Excel worksheet into a new schedule.";
         public const string RibbonLinkLong =
-            "Pick an .xlsx workbook, choose a worksheet and optional cell range, and create a "
-            + "linked schedule that shows the worksheet content. The link is stored in the model "
-            + "so it can be reloaded when the workbook changes.";
+            "Choose an .xlsx workbook, worksheet and optional cell range to create a linked table. "
+            + "Its initial widths are calculated from Excel and the displayed text. "
+            + "Later reloads keep the current column widths unless you choose Recalculate in Column Widths.";
 
         public const string RibbonReloadText = "Reload\nLink";
         public const string RibbonReloadTooltip = "Reload the active linked schedule from Excel.";
         public const string RibbonReloadLong =
-            "Rebuild the active (or selected) linked schedule from the current workbook, honoring "
-            + "the stored width scale and column/row modes. Nothing changes if the workbook cannot "
-            + "be read.";
+            "Reload workbook content using the link's saved reload policies. "
+            + "Keep retains current column widths; Recalculate calculates widths again from Excel and text.";
 
         public const string RibbonManageText = "Link\nManager";
         public const string RibbonManageTooltip = "List and manage all Excel-linked schedules.";
         public const string RibbonManageLong =
-            "Show every Excel-linked schedule with its source path and status, edit each link's "
-            + "width scale and column/row modes, and reload the selected link or all links.";
+            "List linked schedules with their sources and status, reload selected or all links, "
+            + "and check and repair unsafe tables. Use Column Widths to adjust layout and reload policies.";
 
         // ---- Layout ribbon panel ----
         public const string RibbonLayoutPanel = "Layout";
@@ -848,10 +850,11 @@
             "Apply a column-width preset to the linked schedule without opening a dialog.";
 
         public const string RibbonFitContentText = "Fit Content";
-        public const string RibbonFitContentTooltip = "Resize each column to fit the text it shows.";
+        public const string RibbonFitContentTooltip =
+            "Redistribute column widths within the table's current total width.";
         public const string RibbonFitContentLong =
-            "Measure the text currently shown in the linked table and size every column to fit it "
-            + "(full-width characters counted correctly). The widths are then kept on reload.";
+            "Redistribute the table's current total width to suit its displayed text. "
+            + "The resulting column widths are kept on reload. Check wrapped text on the sheet.";
 
         public const string RibbonDistributeText = "Distribute Evenly";
         public const string RibbonDistributeTooltip =
@@ -864,8 +867,8 @@
         public const string RibbonRestoreWidthsTooltip =
             "Restore column widths from the current linked Excel worksheet.";
         public const string RibbonRestoreWidthsLong =
-            "Re-read the linked worksheet and set the column widths it defines (scaled by this "
-            + "link's width scale). The reload policy is left unchanged.";
+            "Read column widths from the current linked Excel worksheet and apply them. "
+            + "The reload policy is left unchanged.";
 
         // ---- Layout (column widths) ----
         public const string LayoutNoTarget =
@@ -899,6 +902,14 @@
 
         public const string LayoutNoColumns =
             "The linked schedule has no header columns to resize. No layout transaction was started.";
+
+        public const string LayoutFitContentReadFailed =
+            "The current table could not be read completely. No Fit Content widths were calculated. "
+            + "Reload or check and repair the link, then try again.";
+
+        public const string LayoutFitContentInvalidTotal =
+            "The current column widths do not form a valid total. "
+            + "Check the widths before using Fit Content.";
 
         public const string LayoutUnsafeStyles =
             "The column widths were not changed because this schedule has unsafe or unverifiable cell styles.\n\n"
@@ -957,51 +968,255 @@
         public const string LayoutGridWidthHeader = "Width";
         public const string LayoutQuickGroup = "Quick layout";
         public const string LayoutQuickNote =
-            "Updates the values above. Nothing is applied until you choose Apply & Close.";
+            "These tools update the values above. Choose Apply or Apply & Close to change the table.";
         public const string LayoutFitContent = "Fit Content";
         public const string LayoutDistributeEvenly = "Distribute Evenly";
         public const string LayoutRestoreExcel = "Restore Excel Widths";
         public const string LayoutFitToTotal = "Fit to Total";
-        public const string LayoutTargetTotalLabel = "Target total:";
-        public const string LayoutFitContentTip = "Resize each column to fit the text it shows.";
+        public const string LayoutTargetTotalLabel = "Table width:";
+        public const string LayoutFitContentTip =
+            "Redistribute the current total width using the displayed text. "
+            + "Numbers and reference-like values are given priority; some text may wrap. "
+            + "Fit-to-text fits row heights on Apply; Keep preserves them.";
+        public const string LayoutFitContentWrapNote =
+            "Some text may wrap at this total width. With Fit-to-text, the add-in fits row heights "
+            + "when you apply. Check that all text is visible on the sheet.";
+        public const string LayoutFitContentBelowMinimum =
+            "The current total is below the minimum supported width. Keeping that total is not possible.";
+        public const string LayoutFitContentAboveMaximum =
+            "The current total is above the maximum supported width. Keeping that total is not possible.";
+        public const string LayoutFitContentEstimateLimited =
+            "The estimate is limited by long text or maximum column widths; inspect the table.";
         public const string LayoutDistributeTip = "Make all columns the same width (keeps the current total).";
         public const string LayoutRestoreTip = "Restore column widths from the current linked Excel worksheet.";
         public const string LayoutFitToTotalTip = "Scale the columns so their total matches the target.";
-        public const string LayoutPolicyGroup = "Reload policy";
+        public const string LayoutPolicyGroup = "Column widths on reload";
+        public const string LayoutRowPolicyGroup = "Row heights on reload";
+        public const string LayoutRowPolicyHint =
+            "Fit-to-text also fits rows when you apply column widths. Keep preserves current heights.";
+        public const string LayoutKeepRowHeightsNote =
+            "Row heights are kept. Wrapped text may be hidden. To fit the rows, select "
+            + "'Fit rows to text on reload' in Column Widths and apply, or adjust row heights yourself.";
+        public static string AppendLayoutRowPolicyNote(string summary, RowHeightMode mode)
+        {
+            string text = summary ?? string.Empty;
+            if (mode != RowHeightMode.KeepManualHeights) return text;
+            return string.IsNullOrEmpty(text) ? LayoutKeepRowHeightsNote
+                : text + "\n\n" + LayoutKeepRowHeightsNote;
+        }
         public const string LayoutPolicyKeep = "Keep these widths on reload";
         public const string LayoutPolicyRecalculate = "Recalculate from Excel on reload";
         public const string LayoutApply = "Apply";
         public const string LayoutApplyTip =
-            "Apply the widths now and keep this dialog open so you can keep adjusting.";
+            "Apply the column widths now and save the reload policies, keeping this dialog open.";
         public const string LayoutApplyAndClose = "Apply && Close";
         public const string LayoutOpenScheduleView = "Open Schedule View";
         public const string LayoutClose = "Close";
         public const string LayoutTotalPrefix = "Total: ";
 
-        public static string LayoutInvalidCell(int oneBasedColumn, string unit)
-        {
-            return "Column " + oneBasedColumn + ": enter a positive number in " + unit + ".";
-        }
-
-        public static string LayoutInvalidCells(int count)
-        {
-            return count + " column width(s) are not valid numbers. Fix them before applying.";
-        }
-
         public const string LayoutInvalidTarget2 = "Enter a positive number for the target total.";
 
-        public static string LayoutFitContentPartial(double unresolvedInches)
+        public static string LayoutFitToTotalNotReached(
+            string reason, double reachableDisplay, string unit)
         {
-            return "Applied the best fit, but a merged cell still needs about "
-                + unresolvedInches.ToString("F1")
-                + " more inches than its columns can provide (Revit limits a column's width). "
-                + "That merged text may still wrap.";
+            return reason + " Closest supported total: about "
+                + reachableDisplay.ToString("F1", CultureInfo.CurrentCulture)
+                + " " + unit + ".";
         }
 
-        public static string LayoutFitToTotalNotReached(string reason, double reachableDisplay, string unit)
+        public static string LayoutFitContentComfort(double displayed,
+            string unit, int decimals, bool limited)
         {
-            return reason + " The closest reachable total is about "
-                + reachableDisplay.ToString("F1") + " " + unit + ", which was used instead.";
+            return "Estimated comfortable width: about "
+                + displayed.ToString("F" + decimals, CultureInfo.CurrentCulture)
+                + " " + unit + (limited ? " (limited estimate)." : ".");
+        }
+
+        public static string LayoutFitContentProtectionFailed(
+            IReadOnlyList<int> columns, IReadOnlyList<string> columnHeadings)
+        {
+            return "Could not keep these columns on one line: "
+                + LayoutColumnNames(columns, columnHeadings)
+                + ". Check their values on the sheet.";
+        }
+
+        public static string LayoutFitContentMerges(
+            IReadOnlyList<FitContentMergeDeficit> merges,
+            IReadOnlyList<string> columnHeadings)
+        {
+            if (merges == null || merges.Count == 0) return string.Empty;
+            FitContentMergeDeficit first = merges[0];
+            string span = LayoutColumnName(first.Column, columnHeadings);
+            if (first.ColumnSpan > 1)
+            {
+                span += " to " + LayoutColumnName(
+                    first.Column + first.ColumnSpan - 1, columnHeadings);
+            }
+            return "Text in " + merges.Count + " merged cell(s) may wrap because their "
+                + "columns have insufficient width. First affected span: " + span
+                + " (row " + (first.Row + 1) + ").";
+        }
+
+        public static string LayoutFitContentNotes(
+            FixedTotalFitResult fit, double actualDisplay,
+            double comfortableDisplay, string unit, int decimals,
+            IReadOnlyList<string> columnHeadings)
+        {
+            if (fit == null || !fit.CanApply) return string.Empty;
+            List<string> notes = new List<string>();
+            if (fit.Stage == FitContentStage.OutOfRange)
+            {
+                notes.Add(LayoutFitToTotalNotReached(
+                    fit.LimitReason == FitContentLimitReason.BelowMinimum
+                        ? LayoutFitContentBelowMinimum
+                        : LayoutFitContentAboveMaximum,
+                    actualDisplay, unit));
+            }
+            else if (fit.Stage == FitContentStage.Constrained)
+            {
+                notes.Add(LayoutFitContentWrapNote);
+            }
+            if (fit.ProtectionFailedColumns.Count > 0)
+            {
+                notes.Add(LayoutFitContentProtectionFailed(
+                    fit.ProtectionFailedColumns, columnHeadings));
+            }
+            if (fit.UnmetMerges.Count > 0)
+            {
+                notes.Add(LayoutFitContentMerges(
+                    fit.UnmetMerges, columnHeadings));
+            }
+            if (fit.Stage != FitContentStage.Comfortable)
+            {
+                notes.Add("Resulting total: "
+                    + actualDisplay.ToString("F" + decimals,
+                        CultureInfo.CurrentCulture)
+                    + " " + unit + ". "
+                    + LayoutFitContentComfort(comfortableDisplay, unit,
+                        decimals, fit.ComfortableEstimateLimited));
+                if (fit.ComfortableEstimateLimited)
+                {
+                    notes.Add(LayoutFitContentEstimateLimited);
+                }
+                if (fit.ComfortableTotalFeet > fit.ActualTotalFeet
+                    + LayoutOps.Tolerance
+                    && fit.LimitReason != FitContentLimitReason.AboveMaximum)
+                {
+                    notes.Add("To widen the table, change Table width in Column Widths and use Fit to Total.");
+                }
+                else
+                {
+                    notes.Add("If this layout is still unreadable, review the text and table arrangement.");
+                }
+            }
+            return string.Join("\n", notes.ToArray());
+        }
+
+        public static string LayoutColumnKey(int zeroBased)
+        {
+            if (zeroBased < 0)
+            {
+                throw new ArgumentOutOfRangeException("zeroBased");
+            }
+            string key = string.Empty;
+            int value = zeroBased;
+            do
+            {
+                key = (char)('A' + (value % 26)) + key;
+                value = value / 26 - 1;
+            } while (value >= 0);
+            return key;
+        }
+
+        public static string LayoutColumnName(int zeroBased,
+            IReadOnlyList<string> columnHeadings)
+        {
+            string key = LayoutColumnKey(zeroBased);
+            string heading = columnHeadings != null
+                && zeroBased < columnHeadings.Count
+                ? columnHeadings[zeroBased] : null;
+            return string.IsNullOrEmpty(heading) ? key : key + "  " + heading;
+        }
+
+        private static string LayoutColumnNames(IReadOnlyList<int> columns,
+            IReadOnlyList<string> columnHeadings)
+        {
+            List<string> names = new List<string>();
+            if (columns != null)
+            {
+                foreach (int column in columns)
+                {
+                    names.Add(LayoutColumnName(column, columnHeadings));
+                }
+            }
+            return string.Join("; ", names.ToArray());
+        }
+
+        private static string LayoutAllowedWidthRange(
+            double minimumDisplay, double maximumDisplay,
+            string unit, int decimals)
+        {
+            string format = "F" + decimals;
+            return "Changed column widths must be from "
+                + minimumDisplay.ToString(format, CultureInfo.CurrentCulture)
+                + " to " + maximumDisplay.ToString(format,
+                    CultureInfo.CurrentCulture) + " " + unit + ".";
+        }
+
+        private static string LayoutWidthInputRefused(string detail)
+        {
+            return "The column widths could not be applied.\n\n" + detail
+                + "\n\nNo layout transaction was started.";
+        }
+
+        public static string LayoutInvalidInput(ValidationResult validation,
+            double minimumDisplay, double maximumDisplay, double totalDisplay,
+            double? totalLimitDisplay, string unit, int decimals,
+            IReadOnlyList<string> columnHeadings)
+        {
+            if (validation == null) throw new ArgumentNullException("validation");
+            if (validation.IsValid) return string.Empty;
+            List<string> notes = new List<string>();
+            if (validation.NonFiniteColumns.Length > 0)
+            {
+                notes.Add("These columns do not have finite widths: "
+                    + LayoutColumnNames(validation.NonFiniteColumns,
+                        columnHeadings) + ".");
+            }
+            if (validation.OutOfRangeColumns.Length > 0)
+            {
+                notes.Add("These columns are outside the allowed width range: "
+                    + LayoutColumnNames(validation.OutOfRangeColumns,
+                        columnHeadings) + ".");
+            }
+            if (validation.InvalidColumns.Length > 0)
+            {
+                notes.Add(LayoutAllowedWidthRange(
+                    minimumDisplay, maximumDisplay, unit, decimals));
+            }
+            if (validation.ExceedsTotalLimit)
+            {
+                notes.Add("The resulting total width ("
+                    + totalDisplay.ToString("F" + decimals,
+                        CultureInfo.CurrentCulture) + " " + unit
+                    + ") exceeds the safe limit ("
+                    + totalLimitDisplay.Value.ToString("F" + decimals,
+                        CultureInfo.CurrentCulture) + " " + unit + ").");
+            }
+            return LayoutWidthInputRefused(string.Join("\n", notes.ToArray()));
+        }
+
+        public static string LayoutInvalidNumbers(
+            IReadOnlyList<int> columns, double minimumDisplay,
+            double maximumDisplay, string unit, int decimals,
+            IReadOnlyList<string> columnHeadings)
+        {
+            return LayoutWidthInputRefused(
+                "Enter a positive, finite number in " + unit
+                + " for these columns: "
+                + LayoutColumnNames(columns, columnHeadings) + ".\n"
+                + LayoutAllowedWidthRange(minimumDisplay, maximumDisplay,
+                    unit, decimals));
         }
 
         public const string LayoutUnsavedTitle = "Excel Schedule Link";
@@ -1021,12 +1236,6 @@
                 + "worksheet, then restore the widths. No layout transaction was started.";
         }
 
-        public static string LayoutInvalidInput(string reason)
-        {
-            return "The column widths could not be applied.\n\n" + reason
-                + "\n\nNo layout transaction was started.";
-        }
-
         public static string LayoutApplyFailed(
             string where, string detail, bool rollbackVerified)
         {
@@ -1044,5 +1253,15 @@
 
         public static string LayoutColumnLabel(int oneBased) { return "column " + oneBased; }
         public const string LayoutSettingsLabel = "the settings save";
+
+        public const string RowFitCalibrationTitle = "Row Text Fit Calibration";
+        public static string RowFitCalibrationCreated(string name, string reportPath)
+        {
+            return "Created calibration table '" + name + "'. Inspect the Latin and Japanese END markers "
+                + "using the check card. Close this disposable model without saving afterwards.\n\nReport: "
+                + reportPath;
+        }
+        public const string RowFitCalibrationReportFailed =
+            "The calibration report could not be saved. The report text was copied to the clipboard.";
     }
 }
