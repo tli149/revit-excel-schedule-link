@@ -196,6 +196,14 @@ hidden; choose Fit rows to text and apply, or adjust the row heights yourself.
 Revit's own drag operation does not trigger fitting until the next add-in Apply
 or Reload.
 
+**Upgrading from 0.9.x:** links created with 0.9.x keep their saved settings.
+Most use the row setting that 0.9.x showed as **Apply Excel / auto heights**,
+which is now **Fit rows to text on reload**. The next Reload or Column Widths
+Apply, including Quick Layout, therefore fits every header row to its text and
+replaces row heights you adjusted by hand. To keep those heights, open **Column
+Widths** before you reload, choose **Keep current row heights on reload**, and
+press **Apply**. The dialog shows which row setting the link currently uses.
+
 Fit Content is a width preview, so it does not set row heights until Apply. It
 preserves the current candidate total only within the supported total-width
 range. If the total is below or above that range, all columns use the minimum or

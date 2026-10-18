@@ -49,6 +49,16 @@ Changed:
   further automatic work for that document session; a change that had already
   completed before the failure remains.
 
+Upgrading from 0.9.x:
+
+- Links created with 0.9.x keep their saved settings. Most use the row setting
+  that 0.9.x showed as **Apply Excel / auto heights**, which is now **Fit rows
+  to text on reload**. On the next Reload, or the next Column Widths Apply
+  including Quick Layout, the add-in fits each header-row height to its text,
+  so row heights adjusted by hand are replaced. To keep them, open Column
+  Widths, choose **Keep current row heights on reload** and Apply before
+  reloading.
+
 Limitations:
 
 - Row and width estimates are approximate. Row fitting was calibrated on screen at

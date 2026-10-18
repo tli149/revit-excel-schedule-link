@@ -131,14 +131,28 @@ location. Create a new link to the right file.
   checked for the tested tables, not every font or table size; 500-row performance
   has not yet been measured.
 
-## 9. Revit says "Column Width Too Large" while dragging
+## 9. My hand-sized row heights changed after upgrading
+
+**Symptom:** after upgrading from 0.9.x, a Reload or a Column Widths Apply
+(including Quick Layout) replaced row heights you had adjusted by hand.
+
+**Cause:** links created with 0.9.x keep their saved settings. Most use the row
+setting that 0.9.x showed as **Apply Excel / auto heights**, which is now **Fit
+rows to text on reload**, so the add-in fits each header row to its text.
+
+**Fix:** for each link whose heights you want to keep, open **Column Widths**
+before the next Reload, choose **Keep current row heights on reload**, and press
+**Apply**. If the heights were already replaced, adjust them again by hand; with
+Keep selected, later Reloads restore them where Revit allows.
+
+## 10. Revit says "Column Width Too Large" while dragging
 
 This is Revit's own limit for schedule columns. The add-in keeps changed values
 within its supported range, but a native drag can leave an already narrow width
 below the dialog's displayed range. Use Column Widths and **Fit to Total** to
 make the table wider when needed.
 
-## 10. A lone "A" appears under the table in the schedule view
+## 11. A lone "A" appears under the table in the schedule view
 
 That is Revit's column letter for a hidden helper column. It never shows on
 sheets, prints or PDFs.
@@ -147,19 +161,19 @@ Its width still matters because the schedule view fits the table inside it.
 The add-in sets it to the table width on every link and reload. If a table
 looks squeezed into one narrow column, **reload the link once**.
 
-## 11. The whole table disappeared from the schedule view
+## 12. The whole table disappeared from the schedule view
 
 The table probably disappeared because *Show Title* was turned off in the
 schedule's Appearance settings. Turn **Show Title** back on — the table lives
 in the title area.
 
-## 12. My worksheet is not in the dropdown
+## 13. My worksheet is not in the dropdown
 
 The dropdown lists every sheet in the workbook you picked. If one is missing,
 you may not have saved the workbook after adding the sheet, or you may have
 picked a different file. Save in Excel and try again.
 
-## 13. Revit closed when I opened a linked schedule, or you see "Unsafe Excel-linked schedule styles were found."
+## 14. Revit closed when I opened a linked schedule, or you see "Unsafe Excel-linked schedule styles were found."
 
 **Cause:** a version before 0.9.2 saved this table with cells that have no cell
 style. Opening that schedule view can close Revit 2024. The Revit journal may
@@ -186,7 +200,7 @@ automatic work for that document session after this failure. Any change that
 had already completed before the failure remains; the failed action is not
 treated as successful. You see one add-in message, not a second Revit error box.
 
-## 14. The message says "Rollback completion could not be verified."
+## 15. The message says "Rollback completion could not be verified."
 
 Revit did not confirm that the failed change was fully undone. Close the model
 **without saving**, open it again, and check the schedule before you continue.
