@@ -6,7 +6,7 @@ link it into Revit. That was a pain, so I built this to draw the Excel table
 directly in Revit. You can show an Excel worksheet inside Revit as a schedule
 view and update it with one click when the workbook changes.
 
-![Link Manager](docs/images/link-manager.png)
+![An Excel worksheet and the same table as a Revit 2024 schedule view](docs/images/excel-to-revit.png)
 
 > **Status: Pilot (0.10.0).** Works with **Autodesk Revit 2024 only**. Try it on
 > a copy of a project first, keep backups, and check results before you save or
@@ -41,6 +41,8 @@ view and update it with one click when the workbook changes.
   data before touching the model; Fit Content and Distribute use the current
   rendered table, while Restore Excel Widths reads the linked worksheet. It
   asks before contacting an unknown network server.
+
+![Link Manager](docs/images/link-manager.png)
 
 Not included (yet): copying fonts, colors, borders or row heights from Excel,
 write-back to Excel, automatic reload on file change, `.xls`/`.csv`. Row heights
